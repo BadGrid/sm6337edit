@@ -1,0 +1,17 @@
+* text=auto
+
+*.c text
+*.h text
+*.md text
+*.ps1 text
+*.sh text eol=lf
+
+*.png binary
+*.bmp binary
+*.dll binary
+*.ico binary
+*.zip binary
+*.djvu binary
+*.BIN binary
+*.jpg binary
+*.jpeg binary
