@@ -1,0 +1,15 @@
+# Сторонние/генерируемые — не нужны в репозитории
+Windows 98 Second Edition.iso
+toolchain/
+build/
+scratch_icons/
+ocr/
+ocr_txt/
+win98dll/
+page9_ocr.txt
+
+# Огромный промежуточный скан страницы (дубль djvu)
+СМ6337 РЭ_010.bmp
+
+# Содержит захардкоженный API-ключ OCR.space
+tools/ocrspace.sh

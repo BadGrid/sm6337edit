@@ -1,0 +1,55 @@
+#ifndef RESOURCE_H
+#define RESOURCE_H
+
+#define IDR_MENU            1
+
+#define IDM_FILE_NEW        101
+#define IDM_FILE_OPEN       102
+#define IDM_FILE_SAVE       103
+#define IDM_FILE_SAVEAS     104
+#define IDM_FILE_PRINT      105
+#define IDM_FILE_PRINTSETUP 106
+#define IDM_FILE_EXIT       107
+
+#define IDM_EDIT_UNDO       201
+#define IDM_EDIT_CUT        202
+#define IDM_EDIT_COPY       203
+#define IDM_EDIT_PASTE      204
+#define IDM_EDIT_SELECTALL  205
+
+#define IDM_FORMAT_FONT     301
+#define IDM_FORMAT_BOLD     302
+#define IDM_FORMAT_UNDERLINE 304
+#define IDM_FORMAT_PITCH10  305
+#define IDM_FORMAT_PITCH12  306
+#define IDM_FORMAT_PITCH17  307
+#define IDM_FORMAT_DOUBLESTRIKE 308
+#define IDM_FORMAT_EXPANDED 309
+#define IDM_FORMAT_SUPERSCRIPT 310
+#define IDM_FORMAT_SUBSCRIPT 311
+
+#define IDM_VIEW_TOOLBAR    401
+#define IDM_VIEW_STATUSBAR  402
+
+#define IDM_HELP_ABOUT      501
+
+#define IDM_JOKE_CRASH      901
+
+#define IDC_EDIT            1001
+#define IDC_STATUSBAR       1002
+#define IDC_TOOLBAR         1003
+
+#define IDC_RADIO_T14       2001
+#define IDC_RADIO_T15       2002
+#define IDC_CHK_NOFF        2003
+#define IDC_RADIO_MODE_PRINTER 2006
+#define IDC_RADIO_MODE_SOFTWARE 2007
+#define IDC_EDIT_FEEDLINES  2008
+#define IDC_EDIT_COLS       2009
+#define IDC_EDIT_LINES      2010
+#define IDC_CHK_UNIDIR      2011
+#define IDC_EDIT_LINESPACING 2012
+#define IDC_EDIT_LEFTMARGIN  2013
+#define IDC_STATIC_LINESPACING_MM 2014
+
+#endif
