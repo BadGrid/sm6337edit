@@ -16,6 +16,9 @@
 #define IDM_EDIT_COPY       203
 #define IDM_EDIT_PASTE      204
 #define IDM_EDIT_SELECTALL  205
+#define IDM_EDIT_REDO       206
+#define IDM_EDIT_FIND       207
+#define IDM_EDIT_FINDNEXT   208
 
 #define IDM_FORMAT_FONT     301
 #define IDM_FORMAT_BOLD     302

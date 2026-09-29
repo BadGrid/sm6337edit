@@ -490,12 +490,16 @@ static HMENU BuildMenu(void)
 
     HMENU hEdit = CreatePopupMenu();
     AppendMenuA(hEdit, MF_STRING, IDM_EDIT_UNDO, "&Отменить\tCtrl+Z");
+    AppendMenuA(hEdit, MF_STRING, IDM_EDIT_REDO, "&Повторить\tCtrl+Y");
     AppendMenuA(hEdit, MF_SEPARATOR, 0, NULL);
     AppendMenuA(hEdit, MF_STRING, IDM_EDIT_CUT, "&Вырезать\tCtrl+X");
     AppendMenuA(hEdit, MF_STRING, IDM_EDIT_COPY, "&Копировать\tCtrl+C");
     AppendMenuA(hEdit, MF_STRING, IDM_EDIT_PASTE, "&Вставить\tCtrl+V");
     AppendMenuA(hEdit, MF_SEPARATOR, 0, NULL);
     AppendMenuA(hEdit, MF_STRING, IDM_EDIT_SELECTALL, "Выделить &всё\tCtrl+A");
+    AppendMenuA(hEdit, MF_SEPARATOR, 0, NULL);
+    AppendMenuA(hEdit, MF_STRING, IDM_EDIT_FIND, "&Найти...\tCtrl+F");
+    AppendMenuA(hEdit, MF_STRING, IDM_EDIT_FINDNEXT, "Найти &далее\tF3");
     AppendMenuA(hMenu, MF_POPUP, (UINT_PTR)hEdit, "&Правка");
 
     HMENU hFormat = CreatePopupMenu();
@@ -688,6 +692,52 @@ static DWORD CALLBACK StreamInFromFile(DWORD_PTR dwCookie, LPBYTE pbBuff, LONG c
     return 0;
 }
 
+static UINT g_msgFind;
+static HWND g_hFindDlg;
+static FINDREPLACEA g_fr;
+static char g_findBuf[128] = "";
+static DWORD g_findFlags = FR_DOWN;
+
+/* Ищет g_findBuf от конца выделения вниз; при промахе — ещё раз с начала. */
+static void DoFindNext(HWND hWnd)
+{
+    if (!g_findBuf[0]) return;
+    CHARRANGE sel; SendMessageA(g_hEdit, EM_EXGETSEL, 0, (LPARAM)&sel);
+    FINDTEXTEXA ft; ZeroMemory(&ft, sizeof(ft));
+    ft.lpstrText = g_findBuf;
+    DWORD fl = g_findFlags & (FR_DOWN | FR_MATCHCASE | FR_WHOLEWORD);
+    ft.chrg.cpMin = sel.cpMax; ft.chrg.cpMax = -1;
+    LONG pos = (LONG)SendMessageA(g_hEdit, EM_FINDTEXTEX, fl, (LPARAM)&ft);
+    if (pos < 0 && sel.cpMax > 0) {
+        ft.chrg.cpMin = 0; ft.chrg.cpMax = -1;
+        pos = (LONG)SendMessageA(g_hEdit, EM_FINDTEXTEX, fl, (LPARAM)&ft);
+    }
+    if (pos < 0) {
+        MessageBoxA(g_hFindDlg ? g_hFindDlg : hWnd, "Текст не найден.", "Поиск", MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+    SendMessageA(g_hEdit, EM_EXSETSEL, 0, (LPARAM)&ft.chrgText);
+    SendMessageA(g_hEdit, EM_SCROLLCARET, 0, 0);
+}
+
+static void ShowFindDialog(HWND hWnd)
+{
+    if (g_hFindDlg) { SetFocus(g_hFindDlg); return; }
+    /* подставить выделенное слово в поле поиска */
+    CHARRANGE sel; SendMessageA(g_hEdit, EM_EXGETSEL, 0, (LPARAM)&sel);
+    if (sel.cpMax > sel.cpMin && sel.cpMax - sel.cpMin < (LONG)sizeof(g_findBuf)) {
+        TEXTRANGEA tr; tr.chrg = sel; tr.lpstrText = g_findBuf;
+        SendMessageA(g_hEdit, EM_GETTEXTRANGE, 0, (LPARAM)&tr);
+    }
+    ZeroMemory(&g_fr, sizeof(g_fr));
+    g_fr.lStructSize = sizeof(g_fr);
+    g_fr.hwndOwner = hWnd;
+    g_fr.lpstrFindWhat = g_findBuf;
+    g_fr.wFindWhatLen = sizeof(g_findBuf);
+    g_fr.Flags = FR_DOWN | FR_HIDEUPDOWN | (g_findFlags & (FR_MATCHCASE | FR_WHOLEWORD));
+    g_hFindDlg = FindTextA(&g_fr);
+}
+
 static const char *ToolbarTip(UINT id)
 {
     switch (id) {
@@ -700,6 +750,8 @@ static const char *ToolbarTip(UINT id)
     case IDM_EDIT_COPY: return "Копировать";
     case IDM_EDIT_PASTE: return "Вставить";
     case IDM_EDIT_UNDO: return "Отменить";
+    case IDM_EDIT_REDO: return "Повторить";
+    case IDM_EDIT_FIND: return "Найти";
     case IDM_FORMAT_BOLD: return "Жирный";
     case IDM_FORMAT_UNDERLINE: return "Подчёркнутый";
     case IDM_FORMAT_PITCH10: return "Шаг печати 10 (обычный, Pica)";
@@ -716,6 +768,13 @@ static const char *ToolbarTip(UINT id)
 
 static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
+    if (g_msgFind && msg == g_msgFind) {
+        FINDREPLACEA *fr = (FINDREPLACEA *)lParam;
+        if (fr->Flags & FR_DIALOGTERM) { g_hFindDlg = NULL; return 0; }
+        g_findFlags = fr->Flags & (FR_DOWN | FR_MATCHCASE | FR_WHOLEWORD);
+        if (fr->Flags & FR_FINDNEXT) DoFindNext(hWnd);
+        return 0;
+    }
     switch (msg) {
     case WM_CREATE: {
         RECT rc;
@@ -764,6 +823,9 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
             btns[bi].iBitmap = STD_PASTE; btns[bi].idCommand = IDM_EDIT_PASTE; btns[bi].fsState = TBSTATE_ENABLED; btns[bi].fsStyle = TBSTYLE_BUTTON; bi++;
             btns[bi].fsStyle = TBSTYLE_SEP; bi++;
             btns[bi].iBitmap = STD_UNDO; btns[bi].idCommand = IDM_EDIT_UNDO; btns[bi].fsState = TBSTATE_ENABLED; btns[bi].fsStyle = TBSTYLE_BUTTON; bi++;
+            btns[bi].iBitmap = STD_REDOW; btns[bi].idCommand = IDM_EDIT_REDO; btns[bi].fsState = TBSTATE_ENABLED; btns[bi].fsStyle = TBSTYLE_BUTTON; bi++;
+            btns[bi].fsStyle = TBSTYLE_SEP; bi++;
+            btns[bi].iBitmap = STD_FIND; btns[bi].idCommand = IDM_EDIT_FIND; btns[bi].fsState = TBSTATE_ENABLED; btns[bi].fsStyle = TBSTYLE_BUTTON; bi++;
             btns[bi].fsStyle = TBSTYLE_SEP; bi++;
             btns[bi].iBitmap = 16; btns[bi].idCommand = IDM_FORMAT_BOLD; btns[bi].fsState = TBSTATE_ENABLED; btns[bi].fsStyle = TBSTYLE_BUTTON; bi++;
             btns[bi].iBitmap = 17; btns[bi].idCommand = IDM_FORMAT_UNDERLINE; btns[bi].fsState = TBSTATE_ENABLED; btns[bi].fsStyle = TBSTYLE_BUTTON; bi++;
@@ -907,6 +969,15 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
         }
         case IDM_EDIT_UNDO:
             SendMessageA(g_hEdit, WM_UNDO, 0, 0);
+            return 0;
+        case IDM_EDIT_REDO:
+            SendMessageA(g_hEdit, EM_REDO, 0, 0);
+            return 0;
+        case IDM_EDIT_FIND:
+            ShowFindDialog(hWnd);
+            return 0;
+        case IDM_EDIT_FINDNEXT:
+            if (g_findBuf[0]) DoFindNext(hWnd); else ShowFindDialog(hWnd);
             return 0;
         case IDM_EDIT_CUT:
             SendMessageA(g_hEdit, WM_CUT, 0, 0);
@@ -1204,6 +1275,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         return 1;
     }
 
+    g_msgFind = RegisterWindowMessageA(FINDMSGSTRINGA);
+
     INITCOMMONCONTROLSEX icc;
     icc.dwSize = sizeof(icc);
     icc.dwICC = ICC_BAR_CLASSES;
@@ -1225,8 +1298,17 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     ShowWindow(hWnd, nCmdShow);
     UpdateWindow(hWnd);
 
+    static ACCEL accels[] = {
+        { FCONTROL | FVIRTKEY, 'F', IDM_EDIT_FIND },
+        { FVIRTKEY, VK_F3, IDM_EDIT_FINDNEXT },
+        { FCONTROL | FVIRTKEY, 'Y', IDM_EDIT_REDO },
+    };
+    HACCEL hAccel = CreateAcceleratorTableA(accels, sizeof(accels) / sizeof(accels[0]));
+
     MSG msg;
     while (GetMessageA(&msg, NULL, 0, 0)) {
+        if (g_hFindDlg && IsDialogMessageA(g_hFindDlg, &msg)) continue;
+        if (hAccel && TranslateAcceleratorA(hWnd, hAccel, &msg)) continue;
         TranslateMessage(&msg);
         DispatchMessageA(&msg);
     }
