@@ -738,6 +738,55 @@ static void ShowFindDialog(HWND hWnd)
     g_hFindDlg = FindTextA(&g_fr);
 }
 
+/* Держит кнопки тулбара в соответствии с состоянием редактора: серые, когда
+   действие недоступно (нечего отменять/повторять/вырезать/вставить), и
+   «нажатые» для форматирования выделенного текста. Шлём сообщение только
+   если состояние реально поменялось — иначе кнопки моргают. */
+#define TB_TIMER_ID 77
+
+static void TbEnable(int id, BOOL on)
+{
+    LRESULT st = SendMessageA(g_hToolbar, TB_GETSTATE, id, 0);
+    if (st == -1) return;
+    if (((st & TBSTATE_ENABLED) != 0) != (on != 0))
+        SendMessageA(g_hToolbar, TB_ENABLEBUTTON, id, MAKELONG(on ? TRUE : FALSE, 0));
+}
+
+static void TbCheck(int id, BOOL on)
+{
+    LRESULT st = SendMessageA(g_hToolbar, TB_GETSTATE, id, 0);
+    if (st == -1) return;
+    if (((st & TBSTATE_CHECKED) != 0) != (on != 0))
+        SendMessageA(g_hToolbar, TB_CHECKBUTTON, id, MAKELONG(on ? TRUE : FALSE, 0));
+}
+
+static void UpdateToolbarState(void)
+{
+    if (!g_hToolbar || !g_hEdit) return;
+    CHARRANGE sel; SendMessageA(g_hEdit, EM_EXGETSEL, 0, (LPARAM)&sel);
+    BOOL hasSel = sel.cpMax > sel.cpMin;
+    TbEnable(IDM_EDIT_UNDO, SendMessageA(g_hEdit, EM_CANUNDO, 0, 0) != 0);
+    TbEnable(IDM_EDIT_REDO, SendMessageA(g_hEdit, EM_CANREDO, 0, 0) != 0);
+    TbEnable(IDM_EDIT_CUT, hasSel);
+    TbEnable(IDM_EDIT_COPY, hasSel);
+    TbEnable(IDM_EDIT_PASTE, SendMessageA(g_hEdit, EM_CANPASTE, 0, 0) != 0);
+
+    CHARFORMAT2A cf; ZeroMemory(&cf, sizeof(cf));
+    cf.cbSize = sizeof(cf);
+    SendMessageA(g_hEdit, EM_GETCHARFORMAT, SCF_SELECTION, (LPARAM)&cf);
+    /* бит в dwMask сброшен — в выделении смесь, тогда кнопка не «нажата» */
+    TbCheck(IDM_FORMAT_BOLD, (cf.dwMask & CFM_BOLD) && (cf.dwEffects & CFE_BOLD));
+    TbCheck(IDM_FORMAT_UNDERLINE, (cf.dwMask & CFM_UNDERLINE) && (cf.dwEffects & CFE_UNDERLINE));
+    TbCheck(IDM_FORMAT_DOUBLESTRIKE, (cf.dwMask & CFM_STRIKEOUT) && (cf.dwEffects & CFE_STRIKEOUT));
+    TbCheck(IDM_FORMAT_SUPERSCRIPT, (cf.dwMask & CFM_SUPERSCRIPT) && (cf.dwEffects & CFE_SUPERSCRIPT));
+    TbCheck(IDM_FORMAT_SUBSCRIPT, (cf.dwMask & CFM_SUBSCRIPT) && (cf.dwEffects & CFE_SUBSCRIPT));
+    TbCheck(IDM_FORMAT_EXPANDED, (cf.dwMask & CFM_SIZE) && cf.yHeight >= 260);
+    BOOL faceKnown = (cf.dwMask & CFM_FACE) != 0;
+    TbCheck(IDM_FORMAT_PITCH12, faceKnown && strcmp(cf.szFaceName, SM_PITCH_FACE_ELITE) == 0);
+    TbCheck(IDM_FORMAT_PITCH17, faceKnown && strcmp(cf.szFaceName, SM_PITCH_FACE_CONDENSED) == 0);
+    TbCheck(IDM_FORMAT_PITCH10, faceKnown && strcmp(cf.szFaceName, SM_PITCH_FACE_NORMAL) == 0);
+}
+
 static const char *ToolbarTip(UINT id)
 {
     switch (id) {
@@ -827,8 +876,8 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
             btns[bi].fsStyle = TBSTYLE_SEP; bi++;
             btns[bi].iBitmap = STD_FIND; btns[bi].idCommand = IDM_EDIT_FIND; btns[bi].fsState = TBSTATE_ENABLED; btns[bi].fsStyle = TBSTYLE_BUTTON; bi++;
             btns[bi].fsStyle = TBSTYLE_SEP; bi++;
-            btns[bi].iBitmap = 16; btns[bi].idCommand = IDM_FORMAT_BOLD; btns[bi].fsState = TBSTATE_ENABLED; btns[bi].fsStyle = TBSTYLE_BUTTON; bi++;
-            btns[bi].iBitmap = 17; btns[bi].idCommand = IDM_FORMAT_UNDERLINE; btns[bi].fsState = TBSTATE_ENABLED; btns[bi].fsStyle = TBSTYLE_BUTTON; bi++;
+            btns[bi].iBitmap = 16; btns[bi].idCommand = IDM_FORMAT_BOLD; btns[bi].fsState = TBSTATE_ENABLED; btns[bi].fsStyle = TBSTYLE_CHECK; bi++;
+            btns[bi].iBitmap = 17; btns[bi].idCommand = IDM_FORMAT_UNDERLINE; btns[bi].fsState = TBSTATE_ENABLED; btns[bi].fsStyle = TBSTYLE_CHECK; bi++;
             btns[bi].fsStyle = TBSTYLE_SEP; bi++;
             /* Ячейки 18..24 полосы — пока пустые заглушки под будущие иконки
                (шаг 10/12/17, двойная, расширенная, индексы). Подписи уже работают. */
@@ -836,7 +885,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
                 static const int fmtIds[7] = { IDM_FORMAT_PITCH10, IDM_FORMAT_PITCH12, IDM_FORMAT_PITCH17,
                     IDM_FORMAT_DOUBLESTRIKE, IDM_FORMAT_EXPANDED, IDM_FORMAT_SUPERSCRIPT, IDM_FORMAT_SUBSCRIPT };
                 for (int k = 0; k < 7; k++) {
-                    btns[bi].iBitmap = 18 + k; btns[bi].idCommand = fmtIds[k]; btns[bi].fsState = TBSTATE_ENABLED; btns[bi].fsStyle = TBSTYLE_BUTTON; bi++;
+                    btns[bi].iBitmap = 18 + k; btns[bi].idCommand = fmtIds[k]; btns[bi].fsState = TBSTATE_ENABLED; btns[bi].fsStyle = TBSTYLE_CHECK; bi++;
                 }
             }
             btns[bi].fsStyle = TBSTYLE_SEP; bi++;
@@ -876,8 +925,13 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
         }
 
         SetFocus(g_hEdit);
+        UpdateToolbarState();
+        SetTimer(hWnd, TB_TIMER_ID, 200, NULL);
         return 0;
     }
+    case WM_TIMER:
+        if (wParam == TB_TIMER_ID) UpdateToolbarState();
+        return 0;
     case WM_SIZE: {
         if (g_hToolbar) SendMessageA(g_hToolbar, WM_SIZE, 0, 0);
         RECT rcTB; GetWindowRect(g_hToolbar, &rcTB);
@@ -1226,6 +1280,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
         return 0;
     }
     case WM_DESTROY:
+        KillTimer(hWnd, TB_TIMER_ID);
         if (g_hFont) DeleteObject(g_hFont);
         PostQuitMessage(0);
         return 0;
