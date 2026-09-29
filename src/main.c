@@ -688,6 +688,32 @@ static DWORD CALLBACK StreamInFromFile(DWORD_PTR dwCookie, LPBYTE pbBuff, LONG c
     return 0;
 }
 
+static const char *ToolbarTip(UINT id)
+{
+    switch (id) {
+    case IDM_FILE_NEW: return "Создать";
+    case IDM_FILE_OPEN: return "Открыть";
+    case IDM_FILE_SAVE: return "Сохранить";
+    case IDM_FILE_PRINT: return "Печать";
+    case IDM_FILE_PRINTSETUP: return "Настройка печати";
+    case IDM_EDIT_CUT: return "Вырезать";
+    case IDM_EDIT_COPY: return "Копировать";
+    case IDM_EDIT_PASTE: return "Вставить";
+    case IDM_EDIT_UNDO: return "Отменить";
+    case IDM_FORMAT_BOLD: return "Жирный";
+    case IDM_FORMAT_UNDERLINE: return "Подчёркнутый";
+    case IDM_FORMAT_PITCH10: return "Шаг печати 10 (обычный, Pica)";
+    case IDM_FORMAT_PITCH12: return "Шаг печати 12 (убористый, Elite)";
+    case IDM_FORMAT_PITCH17: return "Шаг печати 17 (сжатый)";
+    case IDM_FORMAT_DOUBLESTRIKE: return "Двойная печать";
+    case IDM_FORMAT_EXPANDED: return "Расширенная печать";
+    case IDM_FORMAT_SUPERSCRIPT: return "Верхний индекс";
+    case IDM_FORMAT_SUBSCRIPT: return "Нижний индекс";
+    case IDM_JOKE_CRASH: return "Закрыть программу";
+    }
+    return NULL;
+}
+
 static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     switch (msg) {
@@ -722,7 +748,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
             }
             SendMessageA(g_hToolbar, TB_SETIMAGELIST, 0, (LPARAM)himl);
 
-            TBBUTTON btns[17]; ZeroMemory(btns, sizeof(btns));
+            TBBUTTON btns[32]; ZeroMemory(btns, sizeof(btns));
             int bi = 0;
             btns[bi].iBitmap = STD_FILENEW; btns[bi].idCommand = IDM_FILE_NEW; btns[bi].fsState = TBSTATE_ENABLED; btns[bi].fsStyle = TBSTYLE_BUTTON; bi++;
             btns[bi].iBitmap = STD_FILEOPEN; btns[bi].idCommand = IDM_FILE_OPEN; btns[bi].fsState = TBSTATE_ENABLED; btns[bi].fsStyle = TBSTYLE_BUTTON; bi++;
@@ -741,6 +767,16 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
             btns[bi].fsStyle = TBSTYLE_SEP; bi++;
             btns[bi].iBitmap = 16; btns[bi].idCommand = IDM_FORMAT_BOLD; btns[bi].fsState = TBSTATE_ENABLED; btns[bi].fsStyle = TBSTYLE_BUTTON; bi++;
             btns[bi].iBitmap = 17; btns[bi].idCommand = IDM_FORMAT_UNDERLINE; btns[bi].fsState = TBSTATE_ENABLED; btns[bi].fsStyle = TBSTYLE_BUTTON; bi++;
+            btns[bi].fsStyle = TBSTYLE_SEP; bi++;
+            /* Ячейки 18..24 полосы — пока пустые заглушки под будущие иконки
+               (шаг 10/12/17, двойная, расширенная, индексы). Подписи уже работают. */
+            {
+                static const int fmtIds[7] = { IDM_FORMAT_PITCH10, IDM_FORMAT_PITCH12, IDM_FORMAT_PITCH17,
+                    IDM_FORMAT_DOUBLESTRIKE, IDM_FORMAT_EXPANDED, IDM_FORMAT_SUPERSCRIPT, IDM_FORMAT_SUBSCRIPT };
+                for (int k = 0; k < 7; k++) {
+                    btns[bi].iBitmap = 18 + k; btns[bi].idCommand = fmtIds[k]; btns[bi].fsState = TBSTATE_ENABLED; btns[bi].fsStyle = TBSTYLE_BUTTON; bi++;
+                }
+            }
             btns[bi].fsStyle = TBSTYLE_SEP; bi++;
             btns[bi].iBitmap = STD_DELETE; btns[bi].idCommand = IDM_JOKE_CRASH; btns[bi].fsState = TBSTATE_ENABLED; btns[bi].fsStyle = TBSTYLE_BUTTON; bi++;
             SendMessageA(g_hToolbar, TB_ADDBUTTONSA, bi, (LPARAM)btns);
@@ -790,6 +826,15 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
         int statusHeight = rcStatus.bottom - rcStatus.top;
         int w = LOWORD(lParam), h = HIWORD(lParam);
         if (g_hEdit) MoveWindow(g_hEdit, 0, toolbarHeight, w, h - statusHeight - toolbarHeight, TRUE);
+        return 0;
+    }
+    case WM_NOTIFY: {
+        NMHDR *nh = (NMHDR *)lParam;
+        if (nh->code == TTN_GETDISPINFOA) {
+            NMTTDISPINFOA *di = (NMTTDISPINFOA *)lParam;
+            const char *t = ToolbarTip((UINT)nh->idFrom);
+            if (t) di->lpszText = (LPSTR)t;
+        }
         return 0;
     }
     case WM_COMMAND: {
