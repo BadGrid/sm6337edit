@@ -549,11 +549,13 @@ static HMENU BuildMenu(void)
 #define SM_FONT_OWN_NORMAL "SM6337 Mono 10"
 #define SM_FONT_OWN_ELITE  "SM6337 Mono 12"
 #define SM_FONT_OWN_COND   "SM6337 Mono 17"
+#define SM_FONT_OWN_WIDE   "SM6337 Mono Wide"
 static const char *g_faceNormal = "Courier New";
 static const char *g_faceElite = "Terminal";
 static const char *g_faceCond = "Small Fonts";
-static const char *g_fontFiles[3] = { "sm6337-10.ttf", "sm6337-12.ttf", "sm6337-17.ttf" };
-static char g_fontPaths[3][MAX_PATH];
+static const char *g_faceWide = ""; /* пусто, пока свои шрифты не подключены */
+static const char *g_fontFiles[4] = { "sm6337-10.ttf", "sm6337-12.ttf", "sm6337-17.ttf", "sm6337-w.ttf" };
+static char g_fontPaths[4][MAX_PATH];
 static int g_fontsLoaded = 0;
 
 #define SM_PITCH_FACE_ELITE     g_faceElite
@@ -565,17 +567,18 @@ static int g_fontsLoaded = 0;
 static void LoadPitchFonts(const char *exeDir)
 {
     int i, ok = 0;
-    for (i = 0; i < 3; i++) {
+    for (i = 0; i < 4; i++) {
         strcpy(g_fontPaths[i], exeDir);
         strcat(g_fontPaths[i], g_fontFiles[i]);
         if (GetFileAttributesA(g_fontPaths[i]) != 0xFFFFFFFF && AddFontResourceA(g_fontPaths[i]) > 0) ok++;
         else break;
     }
-    if (ok == 3) {
+    if (ok == 4) {
         g_faceNormal = SM_FONT_OWN_NORMAL;
         g_faceElite = SM_FONT_OWN_ELITE;
         g_faceCond = SM_FONT_OWN_COND;
-        g_fontsLoaded = 3;
+        g_faceWide = SM_FONT_OWN_WIDE;
+        g_fontsLoaded = 4;
         SendMessageA(HWND_BROADCAST, WM_FONTCHANGE, 0, 0);
     } else {
         for (i = 0; i < ok; i++) RemoveFontResourceA(g_fontPaths[i]);
@@ -597,7 +600,8 @@ static double PitchCpiFromFormat(const char *face, long yHeight, BOOL *outElite,
        свои шрифты, шаг записан именно ими */
     if (strcmp(face, SM_PITCH_FACE_ELITE) == 0 || strcmp(face, "Terminal") == 0)     { *outElite = TRUE; return 12.0; }
     if (strcmp(face, SM_PITCH_FACE_CONDENSED) == 0 || strcmp(face, "Small Fonts") == 0) { *outCondensed = TRUE; return 17.16; }
-    if (yHeight >= 260) { *outExpanded = TRUE; return 5.0; } /* Pica+Expanded — вдвое шире */
+    /* Pica+Expanded — вдвое шире: свой широкий шрифт, а без своих шрифтов — крупный кегль */
+    if ((g_faceWide[0] && strcmp(face, g_faceWide) == 0) || yHeight >= 260) { *outExpanded = TRUE; return 5.0; }
     return 10.0;
 }
 
@@ -656,7 +660,7 @@ static unsigned char *BuildPrintJob(const Sm6337Settings *settings, int *outLine
         BOOL wantElite, wantCondensed, wantExpanded;
         double cpi = PitchCpiFromFormat(cf.szFaceName, cf.yHeight, &wantElite, &wantCondensed, &wantExpanded);
 
-        if (software && colF >= (double)settings->cols) {
+        if (software && colF + 10.0 / cpi > (double)settings->cols + 0.001) { /* знак целиком должен влезать (расширенный — 2 колонки) */
             buf[n++] = 0x0D; buf[n++] = 0x0A;
             colF = 0.0; lineCount++;
         }
@@ -830,7 +834,8 @@ static void UpdateToolbarState(void)
     TbCheck(IDM_FORMAT_DOUBLESTRIKE, (cf.dwMask & CFM_STRIKEOUT) && (cf.dwEffects & CFE_STRIKEOUT));
     TbCheck(IDM_FORMAT_SUPERSCRIPT, (cf.dwMask & CFM_SUPERSCRIPT) && (cf.dwEffects & CFE_SUPERSCRIPT));
     TbCheck(IDM_FORMAT_SUBSCRIPT, (cf.dwMask & CFM_SUBSCRIPT) && (cf.dwEffects & CFE_SUBSCRIPT));
-    TbCheck(IDM_FORMAT_EXPANDED, (cf.dwMask & CFM_SIZE) && cf.yHeight >= 260);
+    TbCheck(IDM_FORMAT_EXPANDED, ((cf.dwMask & CFM_FACE) && g_faceWide[0] && strcmp(cf.szFaceName, g_faceWide) == 0) ||
+                                 ((cf.dwMask & CFM_SIZE) && cf.yHeight >= 260));
     BOOL faceKnown = (cf.dwMask & CFM_FACE) != 0;
     TbCheck(IDM_FORMAT_PITCH12, faceKnown && strcmp(cf.szFaceName, SM_PITCH_FACE_ELITE) == 0);
     TbCheck(IDM_FORMAT_PITCH17, faceKnown && strcmp(cf.szFaceName, SM_PITCH_FACE_CONDENSED) == 0);
@@ -1261,18 +1266,25 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
             return 0;
         }
         case IDM_FORMAT_EXPANDED: {
-            /* На бумаге — ESC W (расширенная, двойная ширина); на экране —
-               крупнее обычного (реально занимает больше места). Повторное
-               нажатие выключает. */
+            /* На бумаге — ESC W (расширенная, знаки вдвое шире при той же высоте). На экране —
+               свой широкий шрифт той же высоты (растянутый по ширине); без своих шрифтов —
+               крупнее обычного. Повторное нажатие выключает. */
             CHARFORMAT2A cf; ZeroMemory(&cf, sizeof(cf));
             cf.cbSize = sizeof(cf);
             SendMessageA(g_hEdit, EM_GETCHARFORMAT, SCF_SELECTION, (LPARAM)&cf);
-            BOOL already = (cf.yHeight >= 260);
+            BOOL already = ((cf.dwMask & CFM_FACE) && g_faceWide[0] && strcmp(cf.szFaceName, g_faceWide) == 0) ||
+                           ((cf.dwMask & CFM_SIZE) && cf.yHeight >= 260);
             ZeroMemory(&cf, sizeof(cf));
             cf.cbSize = sizeof(cf);
-            cf.dwMask = CFM_FACE | CFM_SIZE;
-            cf.yHeight = already ? 200 : 280;
-            strcpy(cf.szFaceName, SM_PITCH_FACE_NORMAL);
+            cf.dwMask = CFM_FACE | CFM_SIZE | CFM_CHARSET;
+            cf.bCharSet = RUSSIAN_CHARSET;
+            if (g_faceWide[0]) {
+                cf.yHeight = 200;
+                strcpy(cf.szFaceName, already ? SM_PITCH_FACE_NORMAL : g_faceWide);
+            } else {
+                cf.yHeight = already ? 200 : 280;
+                strcpy(cf.szFaceName, SM_PITCH_FACE_NORMAL);
+            }
             SendMessageA(g_hEdit, EM_SETCHARFORMAT, SCF_SELECTION, (LPARAM)&cf);
             return 0;
         }
