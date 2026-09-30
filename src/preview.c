@@ -181,9 +181,23 @@ static BOOL ParseJob(const unsigned char *job, DWORD len, const Sm6337Settings *
     return TRUE;
 }
 
-static float PvScale(int clientW)
+/* Масштаб: 0 — «по ширине окна», иначе фиксированный (1,0 = 96 dpi, 100%). При масштабе, при
+   котором лист шире окна, появляется горизонтальная прокрутка — так мелкие знаки можно увеличить. */
+static float g_zoom = 0.0f;
+static int g_scrollX = 0;
+static BOOL g_inUpdateScroll = FALSE;
+
+#define PV_CMD_ZOOMIN  3
+#define PV_CMD_ZOOMOUT 4
+#define PV_CMD_FIT     5
+#define PV_IMG_ZOOM    12   /* лупа из полосы toolbar.bmp */
+#define PV_IMG_FIT     9    /* лист с лупой */
+
+static float PvScale(int viewW)
 {
-    float sc = ((float)clientW - 2 * PV_GAP_PX) / PV_PAPER_W;
+    float sc;
+    if (g_zoom > 0.0f) return g_zoom;
+    sc = ((float)viewW - 2 * PV_GAP_PX) / PV_PAPER_W;
     if (sc > 1.5f) sc = 1.5f;
     if (sc < 0.3f) sc = 0.3f;
     return sc;
@@ -192,6 +206,8 @@ static float PvScale(int clientW)
 static int PvPageH(float sc) { return (int)((PV_TOP_PX * 2 + g_pageHeightPx) * sc); }
 
 static int PvTotalH(float sc) { return (int)(PV_GAP_PX + (float)g_pages * ((float)PvPageH(sc) + PV_GAP_PX)); }
+
+static int PvTotalW(float sc) { return (int)(PV_PAPER_W * sc + 2 * PV_GAP_PX); }
 
 static void PvView(HWND hWnd, RECT *rc)
 {
@@ -202,75 +218,117 @@ static void PvView(HWND hWnd, RECT *rc)
 
 static void UpdateScroll(HWND hWnd)
 {
-    RECT rc; PvView(hWnd, &rc);
-    float sc = PvScale(rc.right);
-    int total = PvTotalH(sc);
-    int viewH = rc.bottom - rc.top;
-    int maxY = total - viewH; if (maxY < 0) maxY = 0;
+    RECT rc;
+    float sc;
+    int totalH, totalW, viewH, viewW, maxY, maxX;
+    SCROLLINFO si;
+    if (g_inUpdateScroll) return;   /* SetScrollInfo меняет клиентскую область и зовёт WM_SIZE */
+    g_inUpdateScroll = TRUE;
+
+    PvView(hWnd, &rc);
+    viewW = rc.right - rc.left;
+    viewH = rc.bottom - rc.top;
+    sc = PvScale(viewW);
+    totalH = PvTotalH(sc);
+    totalW = PvTotalW(sc);
+    maxY = totalH - viewH; if (maxY < 0) maxY = 0;
+    maxX = totalW - viewW; if (maxX < 0) maxX = 0;
     if (g_scrollY > maxY) g_scrollY = maxY;
     if (g_scrollY < 0) g_scrollY = 0;
-    SCROLLINFO si; ZeroMemory(&si, sizeof(si));
+    if (g_scrollX > maxX) g_scrollX = maxX;
+    if (g_scrollX < 0) g_scrollX = 0;
+
+    ZeroMemory(&si, sizeof(si));
     si.cbSize = sizeof(si);
     si.fMask = SIF_RANGE | SIF_PAGE | SIF_POS;
-    si.nMin = 0; si.nMax = total; si.nPage = (UINT)viewH; si.nPos = g_scrollY;
+    si.nMin = 0; si.nMax = totalH; si.nPage = (UINT)viewH; si.nPos = g_scrollY;
     SetScrollInfo(hWnd, SB_VERT, &si, TRUE);
+    si.nMax = totalW; si.nPage = (UINT)viewW; si.nPos = g_scrollX;
+    SetScrollInfo(hWnd, SB_HORZ, &si, TRUE);
+
+    g_inUpdateScroll = FALSE;
 }
 
+/* Рисуем в память и переносим одним блоком: так при растягивании окна и прокрутке нет мерцания
+   и «лишних линий» от недорисованных кусков. */
 static void PaintPv(HWND hWnd, HDC hdc)
 {
-    RECT rc; PvView(hWnd, &rc);
-    IntersectClipRect(hdc, rc.left, rc.top, rc.right, rc.bottom);
-    float sc = PvScale(rc.right);
-    int pageH = PvPageH(sc);
-    int pageW = (int)(PV_PAPER_W * sc);
-    int left = (rc.right - pageW) / 2;
-    if (left < 0) left = 0;
+    RECT rc;
+    int viewW, viewH, pageH, pageW, left, pg, i;
+    float sc;
+    HDC mem;
+    HBITMAP bmp, oldBmp;
+    HBRUSH bg, paper;
+    RECT all;
 
-    HBRUSH bg = CreateSolidBrush(RGB(128, 128, 128));
-    FillRect(hdc, &rc, bg);
+    PvView(hWnd, &rc);
+    viewW = rc.right - rc.left;
+    viewH = rc.bottom - rc.top;
+    if (viewW <= 0 || viewH <= 0) return;
+
+    mem = CreateCompatibleDC(hdc);
+    bmp = CreateCompatibleBitmap(hdc, viewW, viewH);
+    oldBmp = (HBITMAP)SelectObject(mem, bmp);
+
+    sc = PvScale(viewW);
+    pageH = PvPageH(sc);
+    pageW = (int)(PV_PAPER_W * sc);
+    left = (pageW + 2 * (int)PV_GAP_PX <= viewW) ? (viewW - pageW) / 2 : (int)PV_GAP_PX - g_scrollX;
+
+    all.left = 0; all.top = 0; all.right = viewW; all.bottom = viewH;
+    bg = CreateSolidBrush(RGB(128, 128, 128));
+    FillRect(mem, &all, bg);
     DeleteObject(bg);
 
-    int pg;
+    paper = CreateSolidBrush(RGB(255, 255, 255));
     for (pg = 0; pg < g_pages; pg++) {
-        int top = rc.top + (int)(PV_GAP_PX + (float)pg * ((float)pageH + PV_GAP_PX)) - g_scrollY;
-        if (top > rc.bottom || top + pageH < rc.top) continue;
-        RECT r = { left, top, left + pageW, top + pageH };
-        HBRUSH paper = CreateSolidBrush(RGB(255, 255, 255));
-        FillRect(hdc, &r, paper); DeleteObject(paper);
-        FrameRect(hdc, &r, (HBRUSH)GetStockObject(BLACK_BRUSH));
+        RECT r;
+        int top = (int)(PV_GAP_PX + (float)pg * ((float)pageH + PV_GAP_PX)) - g_scrollY;
+        if (top > viewH || top + pageH < 0) continue;
+        r.left = left; r.top = top; r.right = left + pageW; r.bottom = top + pageH;
+        FillRect(mem, &r, paper);
+        FrameRect(mem, &r, (HBRUSH)GetStockObject(BLACK_BRUSH));
     }
+    DeleteObject(paper);
 
-    SetBkMode(hdc, TRANSPARENT);
-    SetTextColor(hdc, RGB(0, 0, 0));
-    int i;
+    SetBkMode(mem, TRANSPARENT);
+    SetTextColor(mem, RGB(0, 0, 0));
     for (i = 0; i < g_glCount; i++) {
         const Glyph *g = &g_gl[i];
-        int top = rc.top + (int)(PV_GAP_PX + (float)g->page * ((float)pageH + PV_GAP_PX)) - g_scrollY;
-        if (top > rc.bottom || top + pageH < rc.top) continue;
-        float lineTop = PV_TOP_PX + (float)g->line * g_lineH;
-        float glyphH = 16.0f;
-        float yOff = 0.0f;
+        int top = (int)(PV_GAP_PX + (float)g->page * ((float)pageH + PV_GAP_PX)) - g_scrollY;
+        float lineTop, glyphH = 16.0f, yOff = 0.0f;
+        int px, py, fh, fw, weight;
+        HFONT old;
+        char c;
+        if (top > viewH || top + pageH < 0) continue;
+        lineTop = PV_TOP_PX + (float)g->line * g_lineH;
         if (g->flags & GF_SUP) { glyphH = 10.0f; }
         if (g->flags & GF_SUB) { glyphH = 10.0f; yOff = 6.0f; }
-        int px = left + (int)(g->x * sc);
-        int py = top + (int)((lineTop + yOff) * sc);
-        int fh = (int)(glyphH * sc); if (fh < 4) fh = 4;
-        int fw = (int)(g->cell * sc); if (fw < 2) fw = 2;
-        int weight = (g->flags & GF_BOLD) ? FW_BOLD : FW_NORMAL;
-        HFONT old = (HFONT)SelectObject(hdc, GetPvFont(fh, fw, weight));
-        char c = (char)g->ch;
-        TextOutA(hdc, px, py, &c, 1);
-        if (g->flags & GF_DSTRIKE) TextOutA(hdc, px, py + 1, &c, 1); /* второй проход иглами чуть ниже */
+        px = left + (int)(g->x * sc + 0.5f);
+        py = top + (int)((lineTop + yOff) * sc + 0.5f);
+        if (px > viewW || px + (int)(g->cell * sc) < 0) continue;
+        fh = (int)(glyphH * sc + 0.5f); if (fh < 5) fh = 5;
+        fw = (int)(g->cell * sc + 0.5f); if (fw < 3) fw = 3;
+        weight = (g->flags & GF_BOLD) ? FW_BOLD : FW_NORMAL;
+        old = (HFONT)SelectObject(mem, GetPvFont(fh, fw, weight));
+        c = (char)g->ch;
+        TextOutA(mem, px, py, &c, 1);
+        if (g->flags & GF_DSTRIKE) TextOutA(mem, px, py + 1, &c, 1); /* второй проход иглами чуть ниже */
         if (g->flags & GF_UNDER) {
             int uy = top + (int)((lineTop + 15.0f) * sc);
-            MoveToEx(hdc, px, uy, NULL); LineTo(hdc, px + (int)(g->cell * sc), uy);
+            MoveToEx(mem, px, uy, NULL); LineTo(mem, px + (int)(g->cell * sc), uy);
         }
-        SelectObject(hdc, old);
+        SelectObject(mem, old);
     }
+
+    BitBlt(hdc, rc.left, rc.top, viewW, viewH, mem, 0, 0, SRCCOPY);
+    SelectObject(mem, oldBmp);
+    DeleteObject(bmp);
+    DeleteDC(mem);
 }
 
-/* Панель кнопок сверху: «Печать» и «Закрыть» (картинки берём из той же полосы toolbar.bmp,
-   что и главный тулбар; если файла нет — кнопки только с текстом). */
+/* Панель кнопок сверху: Печать, масштаб, Закрыть (картинки — из той же полосы toolbar.bmp, что и у
+   главного тулбара; если файла нет — кнопки только с текстом). */
 static void CreatePvToolbar(HWND hWnd)
 {
     char path[MAX_PATH];
@@ -285,22 +343,56 @@ static void CreatePvToolbar(HWND hWnd)
         DeleteObject(hStrip);
     }
     g_hPvTb = CreateWindowExA(0, TOOLBARCLASSNAMEA, NULL,
-        WS_CHILD | WS_VISIBLE | TBSTYLE_FLAT | TBSTYLE_TOOLTIPS,
+        WS_CHILD | WS_VISIBLE | TBSTYLE_FLAT | TBSTYLE_TOOLTIPS | CCS_NODIVIDER,
         0, 0, 0, 0, hWnd, (HMENU)100, GetModuleHandleA(NULL), NULL);
     if (!g_hPvTb) return;
     SendMessageA(g_hPvTb, TB_BUTTONSTRUCTSIZE, sizeof(TBBUTTON), 0);
     if (himl) SendMessageA(g_hPvTb, TB_SETIMAGELIST, 0, (LPARAM)himl);
     SendMessageA(g_hPvTb, TB_SETMAXTEXTROWS, 1, 0);
     {
-        static const char labels[] = "Печать\0Закрыть\0";
+        static const char labels[] = "Печать\0Крупнее\0Мельче\0По ширине\0Закрыть\0";
         int first = (int)SendMessageA(g_hPvTb, TB_ADDSTRINGA, 0, (LPARAM)labels);
-        TBBUTTON b[2]; ZeroMemory(b, sizeof(b));
-        b[0].iBitmap = himl ? PV_IMG_PRINT : 0; b[0].idCommand = PV_CMD_PRINT; b[0].fsState = TBSTATE_ENABLED; b[0].fsStyle = TBSTYLE_BUTTON; b[0].iString = first;
-        b[1].iBitmap = himl ? PV_IMG_CLOSE : 0; b[1].idCommand = PV_CMD_CLOSE; b[1].fsState = TBSTATE_ENABLED; b[1].fsStyle = TBSTYLE_BUTTON; b[1].iString = first + 1;
-        SendMessageA(g_hPvTb, TB_ADDBUTTONSA, 2, (LPARAM)b);
+        TBBUTTON b[7]; ZeroMemory(b, sizeof(b));
+        b[0].iBitmap = himl ? PV_IMG_PRINT : 0; b[0].idCommand = PV_CMD_PRINT;   b[0].fsState = TBSTATE_ENABLED; b[0].fsStyle = TBSTYLE_BUTTON; b[0].iString = first;
+        b[1].fsStyle = TBSTYLE_SEP;
+        b[2].iBitmap = himl ? PV_IMG_ZOOM : 0;  b[2].idCommand = PV_CMD_ZOOMIN;  b[2].fsState = TBSTATE_ENABLED; b[2].fsStyle = TBSTYLE_BUTTON; b[2].iString = first + 1;
+        b[3].iBitmap = himl ? PV_IMG_ZOOM : 0;  b[3].idCommand = PV_CMD_ZOOMOUT; b[3].fsState = TBSTATE_ENABLED; b[3].fsStyle = TBSTYLE_BUTTON; b[3].iString = first + 2;
+        b[4].iBitmap = himl ? PV_IMG_FIT : 0;   b[4].idCommand = PV_CMD_FIT;     b[4].fsState = TBSTATE_ENABLED; b[4].fsStyle = TBSTYLE_BUTTON; b[4].iString = first + 3;
+        b[5].fsStyle = TBSTYLE_SEP;
+        b[6].iBitmap = himl ? PV_IMG_CLOSE : 0; b[6].idCommand = PV_CMD_CLOSE;   b[6].fsState = TBSTATE_ENABLED; b[6].fsStyle = TBSTYLE_BUTTON; b[6].iString = first + 4;
+        SendMessageA(g_hPvTb, TB_ADDBUTTONSA, 7, (LPARAM)b);
     }
     SendMessageA(g_hPvTb, TB_AUTOSIZE, 0, 0);
     { RECT r; GetWindowRect(g_hPvTb, &r); g_tbH = r.bottom - r.top; }
+}
+
+/* Смена масштаба с сохранением положения на листе (прокрутка пересчитывается пропорционально). */
+static void PvSetZoom(HWND hWnd, float newZoom)
+{
+    RECT rc;
+    float oldSc, newSc;
+    PvView(hWnd, &rc);
+    oldSc = PvScale(rc.right - rc.left);
+    if (newZoom > 3.0f) newZoom = 3.0f;
+    if (newZoom > 0.0f && newZoom < 0.3f) newZoom = 0.3f;
+    g_zoom = newZoom;
+    newSc = PvScale(rc.right - rc.left);
+    if (oldSc > 0.0f) {
+        g_scrollY = (int)((float)g_scrollY * newSc / oldSc);
+        g_scrollX = (int)((float)g_scrollX * newSc / oldSc);
+    }
+    if (newZoom == 0.0f) g_scrollX = 0;
+    UpdateScroll(hWnd);
+    InvalidateRect(hWnd, NULL, FALSE);
+}
+
+static void PvZoomBy(HWND hWnd, float factor)
+{
+    RECT rc;
+    float cur;
+    PvView(hWnd, &rc);
+    cur = PvScale(rc.right - rc.left);
+    PvSetZoom(hWnd, cur * factor);
 }
 
 static LRESULT CALLBACK PvProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
@@ -316,6 +408,9 @@ static LRESULT CALLBACK PvProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam
             NMTTDISPINFOA *di = (NMTTDISPINFOA *)lParam;
             if (nh->idFrom == PV_CMD_PRINT) di->lpszText = "Напечатать (Ctrl+P)";
             else if (nh->idFrom == PV_CMD_CLOSE) di->lpszText = "Закрыть предпросмотр (Esc)";
+            else if (nh->idFrom == PV_CMD_ZOOMIN) di->lpszText = "Увеличить (+)";
+            else if (nh->idFrom == PV_CMD_ZOOMOUT) di->lpszText = "Уменьшить (-)";
+            else if (nh->idFrom == PV_CMD_FIT) di->lpszText = "Лист по ширине окна (0)";
         }
         return 0;
     }
@@ -336,10 +431,11 @@ static LRESULT CALLBACK PvProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam
     }
     case WM_ERASEBKGND: return 1;
     case WM_VSCROLL: {
+        int viewH, page, y;
         PvView(hWnd, &rc);
-        int viewH = rc.bottom - rc.top;
-        int page = viewH > 40 ? viewH - 20 : viewH;
-        int y = g_scrollY;
+        viewH = rc.bottom - rc.top;
+        page = viewH > 40 ? viewH - 20 : viewH;
+        y = g_scrollY;
         switch (LOWORD(wParam)) {
         case SB_LINEUP: y -= 32; break;
         case SB_LINEDOWN: y += 32; break;
@@ -358,13 +454,43 @@ static LRESULT CALLBACK PvProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam
         InvalidateRect(hWnd, NULL, FALSE);
         return 0;
     }
+    case WM_HSCROLL: {
+        int viewW, page, x;
+        PvView(hWnd, &rc);
+        viewW = rc.right - rc.left;
+        page = viewW > 40 ? viewW - 20 : viewW;
+        x = g_scrollX;
+        switch (LOWORD(wParam)) {
+        case SB_LINELEFT: x -= 32; break;
+        case SB_LINERIGHT: x += 32; break;
+        case SB_PAGELEFT: x -= page; break;
+        case SB_PAGERIGHT: x += page; break;
+        case SB_LEFT: x = 0; break;
+        case SB_RIGHT: x = 1 << 24; break;
+        case SB_THUMBTRACK: case SB_THUMBPOSITION: {
+            SCROLLINFO si; ZeroMemory(&si, sizeof(si)); si.cbSize = sizeof(si); si.fMask = SIF_TRACKPOS;
+            GetScrollInfo(hWnd, SB_HORZ, &si);
+            x = si.nTrackPos; break;
+        }
+        }
+        g_scrollX = x;
+        UpdateScroll(hWnd);
+        InvalidateRect(hWnd, NULL, FALSE);
+        return 0;
+    }
     case WM_COMMAND:
-        if (LOWORD(wParam) == PV_CMD_PRINT && g_job) {
-            char err[256] = "";
-            if (!Sm6337_PrintRaw(g_job, g_jobLen, err, 256))
-                MessageBoxA(hWnd, err, "Ошибка печати", MB_OK | MB_ICONERROR);
-        } else if (LOWORD(wParam) == PV_CMD_CLOSE) {
-            DestroyWindow(hWnd);
+        switch (LOWORD(wParam)) {
+        case PV_CMD_PRINT:
+            if (g_job) {
+                char err[256] = "";
+                if (!Sm6337_PrintRaw(g_job, g_jobLen, err, 256))
+                    MessageBoxA(hWnd, err, "Ошибка печати", MB_OK | MB_ICONERROR);
+            }
+            break;
+        case PV_CMD_CLOSE: DestroyWindow(hWnd); break;
+        case PV_CMD_ZOOMIN: PvZoomBy(hWnd, 1.25f); break;
+        case PV_CMD_ZOOMOUT: PvZoomBy(hWnd, 0.8f); break;
+        case PV_CMD_FIT: PvSetZoom(hWnd, 0.0f); break;
         }
         return 0;
     case WM_KEYDOWN:
@@ -377,6 +503,11 @@ static LRESULT CALLBACK PvProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam
         case VK_NEXT: SendMessageA(hWnd, WM_VSCROLL, SB_PAGEDOWN, 0); return 0;
         case VK_HOME: SendMessageA(hWnd, WM_VSCROLL, SB_TOP, 0); return 0;
         case VK_END: SendMessageA(hWnd, WM_VSCROLL, SB_BOTTOM, 0); return 0;
+        case VK_LEFT: SendMessageA(hWnd, WM_HSCROLL, SB_LINELEFT, 0); return 0;
+        case VK_RIGHT: SendMessageA(hWnd, WM_HSCROLL, SB_LINERIGHT, 0); return 0;
+        case VK_ADD: case VK_OEM_PLUS: PvZoomBy(hWnd, 1.25f); return 0;
+        case VK_SUBTRACT: case VK_OEM_MINUS: PvZoomBy(hWnd, 0.8f); return 0;
+        case '0': case VK_NUMPAD0: PvSetZoom(hWnd, 0.0f); return 0;
         }
         break;
     case WM_DESTROY:
@@ -389,9 +520,13 @@ static LRESULT CALLBACK PvProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam
 void Sm6337_ShowPreview(HWND owner, HINSTANCE hInst, const unsigned char *job, DWORD len, const Sm6337Settings *s)
 {
     static BOOL registered = FALSE;
+    char title[200] = "Предпросмотр печати — страниц: ";
+    char n[12];
+    HMENU hMenu, hFile;
     if (g_hPv) { DestroyWindow(g_hPv); }
     if (!registered) {
         WNDCLASSA wc; ZeroMemory(&wc, sizeof(wc));
+        wc.style = CS_HREDRAW | CS_VREDRAW;
         wc.lpfnWndProc = PvProc;
         wc.hInstance = hInst;
         wc.hCursor = LoadCursorA(NULL, (LPCSTR)IDC_ARROW);
@@ -405,11 +540,10 @@ void Sm6337_ShowPreview(HWND owner, HINSTANCE hInst, const unsigned char *job, D
         MessageBoxA(owner, "Не хватило памяти для предпросмотра.", "Предпросмотр", MB_OK | MB_ICONERROR);
         return;
     }
-    g_scrollY = 0;
+    g_scrollY = 0; g_scrollX = 0; g_zoom = 0.0f;
 
     /* в заголовке — то, что реально дошло до предпросмотра: интервал, поле, строк на листе */
-    char title[200] = "Предпросмотр печати — страниц: ";
-    char n[12]; UIntToStrA((unsigned long)g_pages, n);
+    UIntToStrA((unsigned long)g_pages, n);
     strcat(title, n);
     strcat(title, ", интервал: ");
     if (s->lineSpacing > 0) { UIntToStrA((unsigned long)s->lineSpacing, n); strcat(title, n); strcat(title, "x0,353 мм"); }
@@ -418,14 +552,14 @@ void Sm6337_ShowPreview(HWND owner, HINSTANCE hInst, const unsigned char *job, D
     UIntToStrA((unsigned long)g_linesPerPage, n); strcat(title, n);
     if (s->leftMargin > 0) { strcat(title, ", поле: "); UIntToStrA((unsigned long)s->leftMargin, n); strcat(title, n); }
     if (s->landscape) strcat(title, ", альбомная");
-    HMENU hMenu = CreateMenu();
-    HMENU hFile = CreatePopupMenu();
+    hMenu = CreateMenu();
+    hFile = CreatePopupMenu();
     AppendMenuA(hFile, MF_STRING, PV_CMD_PRINT, "&Печать\tCtrl+P");
     AppendMenuA(hFile, MF_SEPARATOR, 0, NULL);
     AppendMenuA(hFile, MF_STRING, PV_CMD_CLOSE, "&Закрыть\tEsc");
     AppendMenuA(hMenu, MF_POPUP, (UINT_PTR)hFile, "&Файл");
     g_hPv = CreateWindowA("SM6337PreviewClass", title,
-        WS_OVERLAPPEDWINDOW | WS_VSCROLL | WS_VISIBLE,
-        CW_USEDEFAULT, CW_USEDEFAULT, 760, 560, owner, hMenu, hInst, NULL);
+        WS_OVERLAPPEDWINDOW | WS_VSCROLL | WS_HSCROLL | WS_CLIPCHILDREN | WS_VISIBLE,
+        CW_USEDEFAULT, CW_USEDEFAULT, s->landscape ? 960 : 760, 600, owner, hMenu, hInst, NULL);
     if (g_hPv) { UpdateScroll(g_hPv); SetFocus(g_hPv); }
 }

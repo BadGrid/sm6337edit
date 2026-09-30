@@ -237,7 +237,7 @@ static void ShowSm6337SettingsDialog(HWND owner)
     CreateWindowA("EDIT", "0",
         WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP | ES_NUMBER,
         250, 148, 60, 22, hDlg, (HMENU)IDC_EDIT_LEFTMARGIN, hInst, NULL);
-    CreateWindowA("BUTTON", "Альбомная ориентация (бумага боком, размер страницы пересчитывается сам)",
+    CreateWindowA("BUTTON", "Альбомная ориентация (бумага боком)",
         WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX | WS_TABSTOP,
         25, 172, 520, 22, hDlg, (HMENU)IDC_CHK_LANDSCAPE, hInst, NULL);
 
