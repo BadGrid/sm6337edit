@@ -920,12 +920,15 @@ static void CheckPitchApplied(HWND hWnd, const char *want)
    чего «расширенный» (это шрифт) оставался включённым там, где символ слева обычный. Вызывается
    при смене выделения, когда оно пустое (курсор). */
 static BOOL g_inSelSync = FALSE;
+static unsigned long g_changeSeq = 0; /* растёт при каждой правке текста (EN_CHANGE) */
+static unsigned long g_syncSeq = 0;   /* значение на момент последней обработки смены выделения */
 
 static void SyncInsertionFontToLeftChar(LONG pos)
 {
     if (g_inSelSync || !g_hEdit || pos <= 0) return;
+    CHARRANGE now; SendMessageA(g_hEdit, EM_EXGETSEL, 0, (LPARAM)&now);
+    if (now.cpMin != now.cpMax || now.cpMin != pos) return; /* пока ждали, курсор ушёл или появилось выделение */
     g_inSelSync = TRUE;
-    SendMessageA(g_hEdit, WM_SETREDRAW, FALSE, 0);
     {
         CHARRANGE keep = { pos, pos }, left = { pos - 1, pos };
         CHARFORMAT2A prev; ZeroMemory(&prev, sizeof(prev)); prev.cbSize = sizeof(prev);
@@ -945,7 +948,6 @@ static void SyncInsertionFontToLeftChar(LONG pos)
             }
         }
     }
-    SendMessageA(g_hEdit, WM_SETREDRAW, TRUE, 0);
     g_inSelSync = FALSE;
 }
 
@@ -1070,7 +1072,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
             0, toolbarHeight, rc.right, rc.bottom - statusHeight - toolbarHeight,
             hWnd, (HMENU)IDC_EDIT, GetModuleHandleA(NULL), NULL);
 
-        SendMessageA(g_hEdit, EM_SETEVENTMASK, 0, ENM_SELCHANGE);
+        SendMessageA(g_hEdit, EM_SETEVENTMASK, 0, ENM_SELCHANGE | ENM_CHANGE);
 
         /* Автоподбор шрифта RichEdit (IMF_AUTOFONT/DUALFONT) при наборе меняет шрифт на «подходящий»
            для языка клавиатуры: поставили «расширенный» шрифт, набрали букву другой раскладки —
@@ -1101,6 +1103,11 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
     case WM_TIMER:
         if (wParam == TB_TIMER_ID) UpdateToolbarState();
         return 0;
+    case WM_APP + 7:
+        /* курсор сдвинули (не набором текста): привести шрифт вставки к символу слева */
+        if (g_changeSeq != g_syncSeq) g_syncSeq = g_changeSeq; /* сдвиг вызван набором — пропускаем */
+        else SyncInsertionFontToLeftChar((LONG)wParam);
+        return 0;
     case WM_INITMENUPOPUP:
         SyncMenuWithToolbar((HMENU)wParam);
         return 0;
@@ -1120,7 +1127,8 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
         NMHDR *nh = (NMHDR *)lParam;
         if (nh->hwndFrom == g_hEdit && nh->code == EN_SELCHANGE) {
             SELCHANGE *sc = (SELCHANGE *)lParam;
-            if (sc->chrg.cpMin == sc->chrg.cpMax) SyncInsertionFontToLeftChar(sc->chrg.cpMin);
+            if (sc->chrg.cpMin == sc->chrg.cpMax && !g_inSelSync)
+                PostMessageA(hWnd, WM_APP + 7, (WPARAM)sc->chrg.cpMin, 0); /* сделаем после уведомления */
             return 0;
         }
         if (nh->code == TTN_GETDISPINFOA) {
@@ -1133,6 +1141,14 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
     case WM_COMMAND: {
         /* После любой команды сразу обновить кнопки, а не ждать таймер: кнопка-«переключатель»
            сама меняет вид при клике, и если формат не применился, она должна вернуться. */
+        if (LOWORD(wParam) == IDC_EDIT && HIWORD(wParam) == EN_CHANGE) {
+            /* EN_CHANGE приходит и на смену формата; считаем только настоящие правки текста
+               (длина изменилась), чтобы кнопки формата не «съедали» следующий сдвиг курсора */
+            static int lastLen = -1;
+            int len = GetWindowTextLengthA(g_hEdit);
+            if (len != lastLen) { lastLen = len; if (!g_inSelSync) g_changeSeq++; }
+            return 0;
+        }
         PostMessageA(hWnd, WM_TIMER, TB_TIMER_ID, 0);
         if (LOWORD(wParam) >= IDM_FORMAT_BOLD && LOWORD(wParam) <= IDM_FORMAT_SUBSCRIPT && g_hEdit)
             SetFocus(g_hEdit);
