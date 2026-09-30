@@ -13,3 +13,7 @@ page9_ocr.txt
 
 # Содержит захардкоженный API-ключ OCR.space
 tools/ocrspace.sh
+
+# Временные файлы WinHelp
+*.gid
+*.fts

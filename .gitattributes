@@ -20,3 +20,6 @@
 help/*.rtf text eol=crlf
 help/*.hpj text eol=crlf
 help/*.cnt text eol=crlf
+
+# Скомпилированная справка WinHelp
+*.hlp binary
