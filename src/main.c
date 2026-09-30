@@ -835,6 +835,30 @@ static void UpdateToolbarState(void)
     TbCheck(IDM_FORMAT_PITCH12, faceKnown && strcmp(cf.szFaceName, SM_PITCH_FACE_ELITE) == 0);
     TbCheck(IDM_FORMAT_PITCH17, faceKnown && strcmp(cf.szFaceName, SM_PITCH_FACE_CONDENSED) == 0);
     TbCheck(IDM_FORMAT_PITCH10, faceKnown && strcmp(cf.szFaceName, SM_PITCH_FACE_NORMAL) == 0);
+
+    /* Строка состояния: что сейчас у выделения/курсора. Заодно показывает, подключились ли
+       свои шрифты шага — так сразу видно, почему шаг не меняет вид. */
+    if (g_hStatus) {
+        static char last[200] = "";
+        char txt[200] = "";
+        BOOL e, c, x;
+        long h = (cf.dwMask & CFM_SIZE) ? cf.yHeight : 200;
+        double cpi = faceKnown ? PitchCpiFromFormat(cf.szFaceName, h, &e, &c, &x) : 10.0;
+        strcpy(txt, "Шаг печати: ");
+        if (!faceKnown) strcat(txt, "разный");
+        else if (cpi > 15.0) strcat(txt, "17");
+        else if (cpi > 11.0) strcat(txt, "12");
+        else strcat(txt, "10");
+        if (faceKnown && cpi < 6.0) strcat(txt, " (расширенный)");
+        strcat(txt, "   |   Шрифт: ");
+        strcat(txt, faceKnown ? cf.szFaceName : "разный");
+        strcat(txt, "   |   Шрифты шага: ");
+        strcat(txt, g_fontsLoaded ? "свои (sm6337-*.ttf)" : "системные, файлы шрифтов не подключены");
+        if (strcmp(txt, last) != 0) {
+            strcpy(last, txt);
+            SendMessageA(g_hStatus, SB_SETTEXTA, 0, (LPARAM)txt);
+        }
+    }
 }
 
 /* Пункты меню берут состояние у тулбара: те же условия (серые, галочки),
@@ -853,6 +877,29 @@ static void SyncMenuWithToolbar(HMENU hm)
         if (st == -1) continue;
         EnableMenuItem(hm, ids[i], MF_BYCOMMAND | ((st & TBSTATE_ENABLED) ? MF_ENABLED : MF_GRAYED));
         CheckMenuItem(hm, ids[i], MF_BYCOMMAND | ((st & TBSTATE_CHECKED) ? MF_CHECKED : MF_UNCHECKED));
+    }
+}
+
+/* Проверка после смены шага: RichEdit мог молча подставить другой шрифт (например, если
+   системе не удалось найти шрифт с таким именем). Тогда шаг «не меняется» — говорим
+   об этом один раз за запуск, с причиной. */
+static void CheckPitchApplied(HWND hWnd, const char *want)
+{
+    static BOOL warned = FALSE;
+    CHARFORMAT2A cf; ZeroMemory(&cf, sizeof(cf));
+    cf.cbSize = sizeof(cf);
+    SendMessageA(g_hEdit, EM_GETCHARFORMAT, SCF_SELECTION, (LPARAM)&cf);
+    if (warned || ((cf.dwMask & CFM_FACE) && strcmp(cf.szFaceName, want) == 0)) return;
+    warned = TRUE;
+    {
+        char msg[400];
+        strcpy(msg, "Не удалось поставить шрифт «");
+        strcat(msg, want);
+        strcat(msg, "»: редактор оставил «");
+        strcat(msg, (cf.dwMask & CFM_FACE) ? cf.szFaceName : "?");
+        strcat(msg, "».\n\nШрифты шага: ");
+        strcat(msg, g_fontsLoaded ? "свои файлы подключены." : "файлы sm6337-10/12/17.ttf не найдены рядом с программой или не подключились, используются системные.");
+        MessageBoxA(hWnd, msg, "Шаг печати", MB_OK | MB_ICONINFORMATION);
     }
 }
 
@@ -1028,6 +1075,11 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
         return 0;
     }
     case WM_COMMAND: {
+        /* После любой команды сразу обновить кнопки, а не ждать таймер: кнопка-«переключатель»
+           сама меняет вид при клике, и если формат не применился, она должна вернуться. */
+        PostMessageA(hWnd, WM_TIMER, TB_TIMER_ID, 0);
+        if (LOWORD(wParam) >= IDM_FORMAT_BOLD && LOWORD(wParam) <= IDM_FORMAT_SUBSCRIPT && g_hEdit)
+            SetFocus(g_hEdit);
         switch (LOWORD(wParam)) {
         case IDM_FILE_EXIT:
             DestroyWindow(hWnd);
@@ -1163,13 +1215,16 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
             return 0;
         }
         case IDM_FORMAT_PITCH10: {
-            /* Сброс на обычный шаг — обычный шрифт/размер. */
+            /* Обычный шаг — обычный шрифт/размер. */
             CHARFORMAT2A cf; ZeroMemory(&cf, sizeof(cf));
             cf.cbSize = sizeof(cf);
-            cf.dwMask = CFM_FACE | CFM_SIZE;
+            cf.dwMask = CFM_FACE | CFM_SIZE | CFM_CHARSET;
             cf.yHeight = 200;
+            cf.bCharSet = RUSSIAN_CHARSET;
             strcpy(cf.szFaceName, SM_PITCH_FACE_NORMAL);
             SendMessageA(g_hEdit, EM_SETCHARFORMAT, SCF_SELECTION, (LPARAM)&cf);
+            CheckPitchApplied(hWnd, SM_PITCH_FACE_NORMAL);
+            SetFocus(g_hEdit);
             return 0;
         }
         case IDM_FORMAT_PITCH12:
@@ -1180,17 +1235,18 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
                см. комментарий у PitchCpiFromFormat). Повторное нажатие выключает
                (как жирный/подчёркнутый). При печати BuildPrintJob() читает шрифт
                и шлёт нужные ESC/P команды. */
+            /* Шаг — как переключатель «одно из трёх»: нажатие на 12 или 17 ставит его, вернуть
+               обычный — кнопка 10. Повторное нажатие на уже включённый шаг ничего не меняет. */
             const char *want = (LOWORD(wParam) == IDM_FORMAT_PITCH12) ? SM_PITCH_FACE_ELITE : SM_PITCH_FACE_CONDENSED;
             CHARFORMAT2A cf; ZeroMemory(&cf, sizeof(cf));
             cf.cbSize = sizeof(cf);
-            SendMessageA(g_hEdit, EM_GETCHARFORMAT, SCF_SELECTION, (LPARAM)&cf);
-            BOOL already = (strcmp(cf.szFaceName, want) == 0);
-            ZeroMemory(&cf, sizeof(cf));
-            cf.cbSize = sizeof(cf);
-            cf.dwMask = CFM_FACE | CFM_SIZE;
+            cf.dwMask = CFM_FACE | CFM_SIZE | CFM_CHARSET;
             cf.yHeight = 200;
-            strcpy(cf.szFaceName, already ? SM_PITCH_FACE_NORMAL : want);
+            cf.bCharSet = RUSSIAN_CHARSET;
+            strcpy(cf.szFaceName, want);
             SendMessageA(g_hEdit, EM_SETCHARFORMAT, SCF_SELECTION, (LPARAM)&cf);
+            CheckPitchApplied(hWnd, want);
+            SetFocus(g_hEdit);
             return 0;
         }
         case IDM_FORMAT_DOUBLESTRIKE: {
