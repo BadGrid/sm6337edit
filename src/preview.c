@@ -11,7 +11,6 @@
 #include "preview.h"
 
 #define PV_PAPER_W   794.0f   /* A4, 8.27" при 96 dpi */
-#define PV_ORIGIN_X  12.0f    /* где начинается печать от левого края листа */
 #define PV_PICA_PX   9.6f     /* ширина знакоместа при 10 cpi (96 dpi) */
 #define PV_LINE_PX   16.0f    /* 1/6" — стандартный интервал принтера */
 #define PV_TOP_PX    16.0f
@@ -43,6 +42,7 @@ static int g_scrollY;
 static FontEntry g_fonts[48];
 static int g_fontCount;
 static HWND g_hPv;
+static float g_originX = 12.0f; /* где начинается печать от левого края листа, px */
 static unsigned char *g_job; /* копия потока — для кнопки «Печать» в окне */
 static DWORD g_jobLen;
 #define PV_CMD_PRINT 1
@@ -93,8 +93,12 @@ static BOOL ParseJob(const unsigned char *job, DWORD len, const Sm6337Settings *
     g_linesPerPage = s->lines > 0 ? s->lines : 70;
     g_lineH = (s->lineSpacing > 0) ? (float)s->lineSpacing * 1.3342f : PV_LINE_PX;
 
+    /* строка из cols знаков по 10 cpi ставится по центру листа: 82 колонки — это 8,2", а A4 —
+       8,27", так что фиксированный отступ слева выталкивал бы правый край за лист */
+    g_originX = (PV_PAPER_W - (float)s->cols * PV_PICA_PX) / 2.0f;
+    if (g_originX < 2.0f) g_originX = 2.0f;
     float marginPx = (float)s->leftMargin * PV_PICA_PX;
-    float rightPx = PV_ORIGIN_X + (float)s->cols * PV_PICA_PX;
+    float rightPx = g_originX + (float)s->cols * PV_PICA_PX;
     BOOL bold = FALSE, under = FALSE, elite = FALSE, cond = FALSE, dstrike = FALSE, expanded = FALSE;
     int index = 0;
     int page = 0, line = 0;
@@ -139,12 +143,12 @@ static BOOL ParseJob(const unsigned char *job, DWORD len, const Sm6337Settings *
         float cpi = elite ? 12.0f : 10.0f;
         if (cond) cpi *= 1.716f;
         float cell = (96.0f / cpi) * (expanded ? 2.0f : 1.0f);
-        if (PV_ORIGIN_X + x + cell > rightPx + 0.5f && s->pageMode == SM_PAGEMODE_PRINTER) {
+        if (g_originX + x + cell > rightPx + 0.5f && s->pageMode == SM_PAGEMODE_PRINTER) {
             x = marginPx; line++;
             if (line >= g_linesPerPage) { page++; line = 0; }
         }
         Glyph *g = &g_gl[g_glCount++];
-        g->x = PV_ORIGIN_X + x; g->cell = cell; g->page = (short)page; g->line = (short)line;
+        g->x = g_originX + x; g->cell = cell; g->page = (short)page; g->line = (short)line;
         g->ch = rev[b];
         g->flags = (unsigned char)((bold ? GF_BOLD : 0) | (under ? GF_UNDER : 0) | (dstrike ? GF_DSTRIKE : 0) |
             (index == 1 ? GF_SUP : 0) | (index == 2 ? GF_SUB : 0));
