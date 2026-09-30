@@ -6,6 +6,7 @@
 #define _WIN32_WINNT 0x0400
 #define WINVER 0x0400
 #include <windows.h>
+#include <commctrl.h>
 #include <string.h>
 #include "printer.h"
 #include "preview.h"
@@ -42,11 +43,16 @@ static int g_scrollY;
 static FontEntry g_fonts[48];
 static int g_fontCount;
 static HWND g_hPv;
+static HWND g_hPvTb;      /* панель кнопок сверху окна предпросмотра */
+static int g_tbH;         /* её высота: лист рисуется ниже */
+static float g_pageHeightPx = 16.0f * 70; /* физическая высота листа, px при 96 dpi */
 static float g_originX = 12.0f; /* где начинается печать от левого края листа, px */
 static unsigned char *g_job; /* копия потока — для кнопки «Печать» в окне */
 static DWORD g_jobLen;
 #define PV_CMD_PRINT 1
 #define PV_CMD_CLOSE 2
+#define PV_IMG_PRINT 14    /* ячейки полосы toolbar.bmp: принтер и крестик */
+#define PV_IMG_CLOSE 5
 
 static HFONT GetPvFont(int h, int w, int weight)
 {
@@ -72,7 +78,7 @@ static void FreePv(void)
     if (g_job) { HeapFree(GetProcessHeap(), 0, g_job); g_job = NULL; }
     g_jobLen = 0;
     g_glCount = 0;
-    g_hPv = NULL;
+    g_hPv = NULL; g_hPvTb = NULL; g_tbH = 0;
 }
 
 /* Разбор потока байт ESC/P (только те команды, что шлёт BuildPrintJob). */
@@ -92,12 +98,24 @@ static BOOL ParseJob(const unsigned char *job, DWORD len, const Sm6337Settings *
     g_pages = 1;
     g_linesPerPage = s->lines > 0 ? s->lines : 70;
     g_lineH = (s->lineSpacing > 0) ? (float)s->lineSpacing * 1.3342f : PV_LINE_PX;
+    if (s->pageMode == SM_PAGEMODE_PRINTER) {
+        /* принтер сам режет страницы: ESC C n — длина формата в строках ТЕКУЩЕГО интервала */
+        g_pageHeightPx = (float)g_linesPerPage * g_lineH;
+    } else {
+        /* лист стандартный: g_lines строк по 1/6", а сколько строк влезет при выбранном интервале —
+           зависит от него: шире интервал — меньше строк на странице */
+        g_pageHeightPx = (float)g_linesPerPage * PV_LINE_PX;
+        g_linesPerPage = (int)(g_pageHeightPx / g_lineH + 0.001f);
+        if (g_linesPerPage < 1) g_linesPerPage = 1;
+    }
 
     /* строка из cols знаков по 10 cpi ставится по центру листа: 82 колонки — это 8,2", а A4 —
        8,27", так что фиксированный отступ слева выталкивал бы правый край за лист */
     g_originX = (PV_PAPER_W - (float)s->cols * PV_PICA_PX) / 2.0f;
     if (g_originX < 2.0f) g_originX = 2.0f;
-    float marginPx = (float)s->leftMargin * PV_PICA_PX;
+    int margin = s->leftMargin;
+    if (margin >= s->cols) margin = s->cols > 1 ? s->cols - 1 : 0;
+    float marginPx = (float)margin * PV_PICA_PX;
     float rightPx = g_originX + (float)s->cols * PV_PICA_PX;
     BOOL bold = FALSE, under = FALSE, elite = FALSE, cond = FALSE, dstrike = FALSE, expanded = FALSE;
     int index = 0;
@@ -167,28 +185,37 @@ static float PvScale(int clientW)
     return sc;
 }
 
-static int PvPageH(float sc) { return (int)((PV_TOP_PX * 2 + (float)g_linesPerPage * g_lineH) * sc); }
+static int PvPageH(float sc) { return (int)((PV_TOP_PX * 2 + g_pageHeightPx) * sc); }
 
 static int PvTotalH(float sc) { return (int)(PV_GAP_PX + (float)g_pages * ((float)PvPageH(sc) + PV_GAP_PX)); }
 
+static void PvView(HWND hWnd, RECT *rc)
+{
+    GetClientRect(hWnd, rc);
+    rc->top = g_tbH;
+    if (rc->bottom < rc->top) rc->bottom = rc->top;
+}
+
 static void UpdateScroll(HWND hWnd)
 {
-    RECT rc; GetClientRect(hWnd, &rc);
+    RECT rc; PvView(hWnd, &rc);
     float sc = PvScale(rc.right);
     int total = PvTotalH(sc);
-    int maxY = total - rc.bottom; if (maxY < 0) maxY = 0;
+    int viewH = rc.bottom - rc.top;
+    int maxY = total - viewH; if (maxY < 0) maxY = 0;
     if (g_scrollY > maxY) g_scrollY = maxY;
     if (g_scrollY < 0) g_scrollY = 0;
     SCROLLINFO si; ZeroMemory(&si, sizeof(si));
     si.cbSize = sizeof(si);
     si.fMask = SIF_RANGE | SIF_PAGE | SIF_POS;
-    si.nMin = 0; si.nMax = total; si.nPage = (UINT)rc.bottom; si.nPos = g_scrollY;
+    si.nMin = 0; si.nMax = total; si.nPage = (UINT)viewH; si.nPos = g_scrollY;
     SetScrollInfo(hWnd, SB_VERT, &si, TRUE);
 }
 
 static void PaintPv(HWND hWnd, HDC hdc)
 {
-    RECT rc; GetClientRect(hWnd, &rc);
+    RECT rc; PvView(hWnd, &rc);
+    IntersectClipRect(hdc, rc.left, rc.top, rc.right, rc.bottom);
     float sc = PvScale(rc.right);
     int pageH = PvPageH(sc);
     int pageW = (int)(PV_PAPER_W * sc);
@@ -201,8 +228,8 @@ static void PaintPv(HWND hWnd, HDC hdc)
 
     int pg;
     for (pg = 0; pg < g_pages; pg++) {
-        int top = (int)(PV_GAP_PX + (float)pg * ((float)pageH + PV_GAP_PX)) - g_scrollY;
-        if (top > rc.bottom || top + pageH < 0) continue;
+        int top = rc.top + (int)(PV_GAP_PX + (float)pg * ((float)pageH + PV_GAP_PX)) - g_scrollY;
+        if (top > rc.bottom || top + pageH < rc.top) continue;
         RECT r = { left, top, left + pageW, top + pageH };
         HBRUSH paper = CreateSolidBrush(RGB(255, 255, 255));
         FillRect(hdc, &r, paper); DeleteObject(paper);
@@ -214,8 +241,8 @@ static void PaintPv(HWND hWnd, HDC hdc)
     int i;
     for (i = 0; i < g_glCount; i++) {
         const Glyph *g = &g_gl[i];
-        int top = (int)(PV_GAP_PX + (float)g->page * ((float)pageH + PV_GAP_PX)) - g_scrollY;
-        if (top > rc.bottom || top + pageH < 0) continue;
+        int top = rc.top + (int)(PV_GAP_PX + (float)g->page * ((float)pageH + PV_GAP_PX)) - g_scrollY;
+        if (top > rc.bottom || top + pageH < rc.top) continue;
         float lineTop = PV_TOP_PX + (float)g->line * g_lineH;
         float glyphH = 16.0f;
         float yOff = 0.0f;
@@ -238,11 +265,61 @@ static void PaintPv(HWND hWnd, HDC hdc)
     }
 }
 
+/* Панель кнопок сверху: «Печать» и «Закрыть» (картинки берём из той же полосы toolbar.bmp,
+   что и главный тулбар; если файла нет — кнопки только с текстом). */
+static void CreatePvToolbar(HWND hWnd)
+{
+    char path[MAX_PATH];
+    HIMAGELIST himl = NULL;
+    GetModuleFileNameA(NULL, path, MAX_PATH);
+    { char *sl = strrchr(path, '\\'); if (sl) *(sl + 1) = 0; }
+    strcat(path, "toolbar.bmp");
+    HBITMAP hStrip = (HBITMAP)LoadImageA(NULL, path, IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
+    if (hStrip) {
+        himl = ImageList_Create(16, 16, ILC_COLOR24 | ILC_MASK, 20, 4);
+        ImageList_AddMasked(himl, hStrip, RGB(192, 192, 192));
+        DeleteObject(hStrip);
+    }
+    g_hPvTb = CreateWindowExA(0, TOOLBARCLASSNAMEA, NULL,
+        WS_CHILD | WS_VISIBLE | TBSTYLE_FLAT | TBSTYLE_TOOLTIPS,
+        0, 0, 0, 0, hWnd, (HMENU)100, GetModuleHandleA(NULL), NULL);
+    if (!g_hPvTb) return;
+    SendMessageA(g_hPvTb, TB_BUTTONSTRUCTSIZE, sizeof(TBBUTTON), 0);
+    if (himl) SendMessageA(g_hPvTb, TB_SETIMAGELIST, 0, (LPARAM)himl);
+    SendMessageA(g_hPvTb, TB_SETMAXTEXTROWS, 1, 0);
+    {
+        static const char labels[] = "Печать\0Закрыть\0";
+        int first = (int)SendMessageA(g_hPvTb, TB_ADDSTRINGA, 0, (LPARAM)labels);
+        TBBUTTON b[2]; ZeroMemory(b, sizeof(b));
+        b[0].iBitmap = himl ? PV_IMG_PRINT : 0; b[0].idCommand = PV_CMD_PRINT; b[0].fsState = TBSTATE_ENABLED; b[0].fsStyle = TBSTYLE_BUTTON; b[0].iString = first;
+        b[1].iBitmap = himl ? PV_IMG_CLOSE : 0; b[1].idCommand = PV_CMD_CLOSE; b[1].fsState = TBSTATE_ENABLED; b[1].fsStyle = TBSTYLE_BUTTON; b[1].iString = first + 1;
+        SendMessageA(g_hPvTb, TB_ADDBUTTONSA, 2, (LPARAM)b);
+    }
+    SendMessageA(g_hPvTb, TB_AUTOSIZE, 0, 0);
+    { RECT r; GetWindowRect(g_hPvTb, &r); g_tbH = r.bottom - r.top; }
+}
+
 static LRESULT CALLBACK PvProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     RECT rc;
     switch (msg) {
+    case WM_CREATE:
+        CreatePvToolbar(hWnd);
+        return 0;
+    case WM_NOTIFY: {
+        NMHDR *nh = (NMHDR *)lParam;
+        if (nh->code == TTN_GETDISPINFOA) {
+            NMTTDISPINFOA *di = (NMTTDISPINFOA *)lParam;
+            if (nh->idFrom == PV_CMD_PRINT) di->lpszText = "Напечатать (Ctrl+P)";
+            else if (nh->idFrom == PV_CMD_CLOSE) di->lpszText = "Закрыть предпросмотр (Esc)";
+        }
+        return 0;
+    }
     case WM_SIZE:
+        if (g_hPvTb) {
+            SendMessageA(g_hPvTb, WM_SIZE, 0, 0);
+            { RECT r; GetWindowRect(g_hPvTb, &r); g_tbH = r.bottom - r.top; }
+        }
         UpdateScroll(hWnd);
         InvalidateRect(hWnd, NULL, FALSE);
         return 0;
@@ -255,8 +332,9 @@ static LRESULT CALLBACK PvProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam
     }
     case WM_ERASEBKGND: return 1;
     case WM_VSCROLL: {
-        GetClientRect(hWnd, &rc);
-        int page = rc.bottom > 40 ? rc.bottom - 20 : rc.bottom;
+        PvView(hWnd, &rc);
+        int viewH = rc.bottom - rc.top;
+        int page = viewH > 40 ? viewH - 20 : viewH;
         int y = g_scrollY;
         switch (LOWORD(wParam)) {
         case SB_LINEUP: y -= 32; break;

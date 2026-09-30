@@ -639,7 +639,9 @@ static unsigned char *BuildPrintJob(const Sm6337Settings *settings, int *outLine
     /* левое поле (ESC l) — это отступ от края бумаги: строка начинается не с колонки 0, а с
        колонки leftMargin, и правая граница cols отсчитывается от края бумаги, поэтому текста
        в строке помещается на leftMargin знаков меньше */
-    const double startCol = (double)settings->leftMargin;
+    double startColV = (double)settings->leftMargin;
+    if (startColV >= (double)settings->cols) startColV = settings->cols > 1 ? (double)(settings->cols - 1) : 0.0; /* поле не шире строки */
+    const double startCol = startColV;
     double colF = startCol; int lineCount = 1;
     BOOL software = (settings->pageMode == SM_PAGEMODE_SOFTWARE);
 
@@ -1363,10 +1365,17 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
                 return 0;
             }
 
-            if (g_pageMode == SM_PAGEMODE_SOFTWARE && lineCount > g_lines) {
+            /* сколько строк реально влезает на лист: g_lines — для стандартного интервала 1/6", при
+               более широком (ESC A) их меньше, при более узком — больше */
+            int pageLines = g_lines;
+            if (g_lineSpacing > 0) {
+                pageLines = (int)((double)g_lines * 12.0 / (double)g_lineSpacing + 0.001); /* 1/6" = 12 шагов по 0,353 мм */
+                if (pageLines < 1) pageLines = 1;
+            }
+            if (g_pageMode == SM_PAGEMODE_SOFTWARE && lineCount > pageLines) {
                 char msg[200], nStr[12], lStr[12];
                 UIntToStrA((unsigned long)lineCount, nStr);
-                UIntToStrA((unsigned long)g_lines, lStr);
+                UIntToStrA((unsigned long)pageLines, lStr);
                 strcpy(msg, "После переноса получится ");
                 strcat(msg, nStr);
                 strcat(msg, " строк, на страницу помещается ");
