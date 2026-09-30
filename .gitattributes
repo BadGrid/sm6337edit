@@ -15,3 +15,8 @@
 *.BIN binary
 *.jpg binary
 *.jpeg binary
+
+# Справка: Help Workshop ждёт CRLF, файлы в CP1251
+help/*.rtf text eol=crlf
+help/*.hpj text eol=crlf
+help/*.cnt text eol=crlf
