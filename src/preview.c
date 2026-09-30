@@ -11,7 +11,9 @@
 #include "printer.h"
 #include "preview.h"
 
-#define PV_PAPER_W   794.0f   /* A4, 8.27" при 96 dpi */
+#define PV_PORTRAIT_W  794.0f    /* A4 книжный: 210 мм = 8,27" при 96 dpi */
+#define PV_LANDSCAPE_W 1123.0f   /* A4 альбомный: 297 мм */
+#define PV_PAPER_W   g_paperW    /* ширина листа текущей ориентации, px */
 #define PV_PICA_PX   9.6f     /* ширина знакоместа при 10 cpi (96 dpi) */
 #define PV_LINE_PX   16.0f    /* 1/6" — стандартный интервал принтера */
 #define PV_TOP_PX    16.0f
@@ -47,6 +49,7 @@ static HWND g_hPvTb;      /* панель кнопок сверху окна п�
 static int g_tbH;         /* её высота: лист рисуется ниже */
 static float g_pageHeightPx = 16.0f * 70; /* физическая высота листа, px при 96 dpi */
 static float g_originX = 12.0f; /* где начинается печать от левого края листа, px */
+static float g_paperW = 794.0f; /* ширина листа: книжный 794, альбомный 1123 px */
 static unsigned char *g_job; /* копия потока — для кнопки «Печать» в окне */
 static DWORD g_jobLen;
 #define PV_CMD_PRINT 1
@@ -111,6 +114,7 @@ static BOOL ParseJob(const unsigned char *job, DWORD len, const Sm6337Settings *
 
     /* строка из cols знаков по 10 cpi ставится по центру листа: 82 колонки — это 8,2", а A4 —
        8,27", так что фиксированный отступ слева выталкивал бы правый край за лист */
+    g_paperW = s->landscape ? PV_LANDSCAPE_W : PV_PORTRAIT_W;
     g_originX = (PV_PAPER_W - (float)s->cols * PV_PICA_PX) / 2.0f;
     if (g_originX < 2.0f) g_originX = 2.0f;
     int margin = s->leftMargin;
@@ -413,6 +417,7 @@ void Sm6337_ShowPreview(HWND owner, HINSTANCE hInst, const unsigned char *job, D
     strcat(title, ", строк на листе: ");
     UIntToStrA((unsigned long)g_linesPerPage, n); strcat(title, n);
     if (s->leftMargin > 0) { strcat(title, ", поле: "); UIntToStrA((unsigned long)s->leftMargin, n); strcat(title, n); }
+    if (s->landscape) strcat(title, ", альбомная");
     HMENU hMenu = CreateMenu();
     HMENU hFile = CreatePopupMenu();
     AppendMenuA(hFile, MF_STRING, PV_CMD_PRINT, "&Печать\tCtrl+P");

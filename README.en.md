@@ -31,6 +31,9 @@ text comes out crisp, as if printed from the printer's own ROM font.
   - code page: standard PC table 14 or the additional CP866-compatible table 15 (ESC R)
 - Custom page limits (characters per line, lines per page, left margin, line spacing) — line wrapping
   either in the editor or by the printer (ESC Q/C)
+- Landscape orientation (a switch in the print settings): turning it on converts the page size
+  automatically in proportion to the A4 sides (longer line, fewer lines, e.g. 82x70 -> 116x49), and back
+  the same way; the print preview shows the sheet sideways
 - "Do not send hardware form feed" option — on A4 sheets a plain form feed sends the printer into
   an out-of-paper fault (АВР), so by default a number of empty lines is sent instead
 - Unidirectional printing (ESC U) — more precise, but slower

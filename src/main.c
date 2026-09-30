@@ -29,12 +29,16 @@ static int g_feedLinesAfterPrint = 2;
 static BOOL g_unidirectional = FALSE; /* качество печати: FALSE=быстрее(двунаправленная), TRUE=точнее */
 static int g_lineSpacing = 0; /* ESC A n, шаг 0.353мм; 0 = стандартный интервал принтера */
 static int g_leftMargin = 0;  /* ESC l n, левое поле в символах; 0 = без поля */
+/* Альбомная ориентация: бумага боком. g_cols/g_lines хранят размеры ТЕКУЩЕЙ ориентации; при переключении
+   в окне настройки они пересчитываются пропорционально сторонам A4 (297 x 210 мм). */
+static BOOL g_landscape = FALSE;
 static HWND g_hToolbar;
 static char g_iniPath[MAX_PATH] = "";
 static char g_helpPath[MAX_PATH] = ""; /* sm6337edit.hlp рядом с exe */
 static char g_curFile[MAX_PATH] = "";
 
 static BOOL g_dlgDone;
+static BOOL g_dlgLandscape; /* ориентация, которой сейчас соответствуют поля размера в окне настройки */
 static BOOL g_runawayResult;
 static HWND g_hRunawayNo;
 
@@ -55,6 +59,21 @@ static void LoadSettings(void)
     if (g_lineSpacing < 0 || g_lineSpacing > 85) g_lineSpacing = 0;
     g_leftMargin = (int)GetPrivateProfileIntA("Settings", "LeftMargin", 0, g_iniPath);
     if (g_leftMargin < 0 || g_leftMargin > 255) g_leftMargin = 0;
+    g_landscape = GetPrivateProfileIntA("Settings", "Landscape", 0, g_iniPath) ? TRUE : FALSE;
+}
+
+/* Пересчёт размера страницы при смене ориентации: ширина и высота A4 — 297 и 210 мм, так что в
+   альбомной строка длиннее (cols x 297/210), а строк меньше (lines x 210/297). Округление целое. */
+static void ConvertPageSize(BOOL toLandscape, int *cols, int *lines)
+{
+    long c = *cols, l = *lines;
+    if (toLandscape) { c = (c * 297 + 105) / 210; l = (l * 210 + 148) / 297; }
+    else             { c = (c * 210 + 148) / 297; l = (l * 297 + 105) / 210; }
+    if (c < 1) c = 1;
+    if (c > 255) c = 255;
+    if (l < 1) l = 1;
+    if (l > 255) l = 255;
+    *cols = (int)c; *lines = (int)l;
 }
 
 static void SaveSettings(void)
@@ -69,6 +88,7 @@ static void SaveSettings(void)
     UIntToStrA((unsigned long)(g_unidirectional ? 1 : 0), v); WritePrivateProfileStringA("Settings", "Unidirectional", v, g_iniPath);
     UIntToStrA((unsigned long)g_lineSpacing, v); WritePrivateProfileStringA("Settings", "LineSpacing", v, g_iniPath);
     UIntToStrA((unsigned long)g_leftMargin, v); WritePrivateProfileStringA("Settings", "LeftMargin", v, g_iniPath);
+    UIntToStrA((unsigned long)(g_landscape ? 1 : 0), v); WritePrivateProfileStringA("Settings", "Landscape", v, g_iniPath);
 }
 
 /* n * 0.353мм, без float/sprintf — целыми, в сотых мм. */
@@ -99,8 +119,25 @@ static LRESULT CALLBACK SettingsDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPAR
             SetDlgItemTextA(hDlg, IDC_STATIC_LINESPACING_MM, mm);
             return 0;
         }
+        if (LOWORD(wParam) == IDC_CHK_LANDSCAPE && HIWORD(wParam) == BN_CLICKED) {
+            /* смена ориентации: сразу пересчитать «Символов в строке» и «Строк на странице» */
+            BOOL want = (IsDlgButtonChecked(hDlg, IDC_CHK_LANDSCAPE) == BST_CHECKED);
+            if (want != g_dlgLandscape) {
+                BOOL t1 = FALSE, t2 = FALSE;
+                int c = (int)GetDlgItemInt(hDlg, IDC_EDIT_COLS, &t1, FALSE);
+                int l = (int)GetDlgItemInt(hDlg, IDC_EDIT_LINES, &t2, FALSE);
+                if (!t1 || c < 1 || c > 255) c = g_dlgLandscape ? 116 : 82;
+                if (!t2 || l < 1 || l > 255) l = g_dlgLandscape ? 49 : 70;
+                ConvertPageSize(want, &c, &l);
+                SetDlgItemInt(hDlg, IDC_EDIT_COLS, (UINT)c, FALSE);
+                SetDlgItemInt(hDlg, IDC_EDIT_LINES, (UINT)l, FALSE);
+                g_dlgLandscape = want;
+            }
+            return 0;
+        }
         switch (LOWORD(wParam)) {
         case IDOK:
+            g_landscape = g_dlgLandscape;
             g_codeTable = (IsDlgButtonChecked(hDlg, IDC_RADIO_T15) == BST_CHECKED) ? 15 : 14;
             g_avoidFormFeed = (IsDlgButtonChecked(hDlg, IDC_CHK_NOFF) == BST_CHECKED);
             g_pageMode = (IsDlgButtonChecked(hDlg, IDC_RADIO_MODE_PRINTER) == BST_CHECKED)
@@ -200,6 +237,9 @@ static void ShowSm6337SettingsDialog(HWND owner)
     CreateWindowA("EDIT", "0",
         WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP | ES_NUMBER,
         250, 148, 60, 22, hDlg, (HMENU)IDC_EDIT_LEFTMARGIN, hInst, NULL);
+    CreateWindowA("BUTTON", "Альбомная ориентация (бумага боком, размер страницы пересчитывается сам)",
+        WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX | WS_TABSTOP,
+        25, 172, 520, 22, hDlg, (HMENU)IDC_CHK_LANDSCAPE, hInst, NULL);
 
     CreateWindowA("BUTTON", "Ограничение размера страницы",
         WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
@@ -246,6 +286,8 @@ static void ShowSm6337SettingsDialog(HWND owner)
     CheckRadioButton(hDlg, IDC_RADIO_T14, IDC_RADIO_T15,
         (g_codeTable == 14) ? IDC_RADIO_T14 : IDC_RADIO_T15);
     CheckDlgButton(hDlg, IDC_CHK_NOFF, g_avoidFormFeed ? BST_CHECKED : BST_UNCHECKED);
+    CheckDlgButton(hDlg, IDC_CHK_LANDSCAPE, g_landscape ? BST_CHECKED : BST_UNCHECKED);
+    g_dlgLandscape = g_landscape;
     CheckRadioButton(hDlg, IDC_RADIO_MODE_PRINTER, IDC_RADIO_MODE_SOFTWARE,
         (g_pageMode == SM_PAGEMODE_PRINTER) ? IDC_RADIO_MODE_PRINTER : IDC_RADIO_MODE_SOFTWARE);
     SetDlgItemInt(hDlg, IDC_EDIT_FEEDLINES, (UINT)g_feedLinesAfterPrint, FALSE);
@@ -1445,6 +1487,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
             settings.unidirectional = g_unidirectional;
             settings.lineSpacing = g_lineSpacing;
             settings.leftMargin = g_leftMargin;
+            settings.landscape = g_landscape;
 
             int lineCount = 0; DWORD jobLen = 0;
             unsigned char *job = BuildPrintJob(&settings, &lineCount, &jobLen);
@@ -1467,6 +1510,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
             settings.unidirectional = g_unidirectional;
             settings.lineSpacing = g_lineSpacing;
             settings.leftMargin = g_leftMargin;
+            settings.landscape = g_landscape;
 
             int lineCount = 0; DWORD jobLen = 0;
             unsigned char *job = BuildPrintJob(&settings, &lineCount, &jobLen);
