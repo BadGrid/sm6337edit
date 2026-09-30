@@ -403,9 +403,16 @@ void Sm6337_ShowPreview(HWND owner, HINSTANCE hInst, const unsigned char *job, D
     }
     g_scrollY = 0;
 
-    char title[80] = "Предпросмотр печати — страниц: ";
+    /* в заголовке — то, что реально дошло до предпросмотра: интервал, поле, строк на листе */
+    char title[200] = "Предпросмотр печати — страниц: ";
     char n[12]; UIntToStrA((unsigned long)g_pages, n);
     strcat(title, n);
+    strcat(title, ", интервал: ");
+    if (s->lineSpacing > 0) { UIntToStrA((unsigned long)s->lineSpacing, n); strcat(title, n); strcat(title, "x0,353 мм"); }
+    else strcat(title, "стандартный");
+    strcat(title, ", строк на листе: ");
+    UIntToStrA((unsigned long)g_linesPerPage, n); strcat(title, n);
+    if (s->leftMargin > 0) { strcat(title, ", поле: "); UIntToStrA((unsigned long)s->leftMargin, n); strcat(title, n); }
     HMENU hMenu = CreateMenu();
     HMENU hFile = CreatePopupMenu();
     AppendMenuA(hFile, MF_STRING, PV_CMD_PRINT, "&Печать\tCtrl+P");
