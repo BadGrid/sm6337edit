@@ -112,11 +112,14 @@ static BOOL ParseJob(const unsigned char *job, DWORD len, const Sm6337Settings *
         if (g_linesPerPage < 1) g_linesPerPage = 1;
     }
 
-    /* строка из cols знаков по 10 cpi ставится по центру листа: 82 колонки — это 8,2", а A4 —
-       8,27", так что фиксированный отступ слева выталкивал бы правый край за лист */
+    /* Печать начинается у левого края листа с небольшого отступа (6 px = 1,6 мм), а не по центру:
+       иначе при малом числе колонок строка уезжала бы вправо, хотя левое поле 0. Если строка
+       из cols знаков по 10 cpi не помещается с таким отступом (82 колонки — это 8,2", A4 — 8,27"),
+       отступ уменьшаем, чтобы правый край не вылезал за лист. */
     g_paperW = s->landscape ? PV_LANDSCAPE_W : PV_PORTRAIT_W;
-    g_originX = (PV_PAPER_W - (float)s->cols * PV_PICA_PX) / 2.0f;
-    if (g_originX < 2.0f) g_originX = 2.0f;
+    g_originX = PV_PAPER_W - (float)s->cols * PV_PICA_PX;
+    if (g_originX > 6.0f) g_originX = 6.0f;
+    if (g_originX < 0.0f) g_originX = 0.0f;
     int margin = s->leftMargin;
     if (margin >= s->cols) margin = s->cols > 1 ? s->cols - 1 : 0;
     float marginPx = (float)margin * PV_PICA_PX;
@@ -429,7 +432,16 @@ static LRESULT CALLBACK PvProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam
         EndPaint(hWnd, &ps);
         return 0;
     }
-    case WM_ERASEBKGND: return 1;
+    case WM_ERASEBKGND: {
+        /* Лист мы рисуем целиком сами, а вот плоский тулбар (TBSTYLE_FLAT) просит у родителя фон под
+           кнопками. Если на этот запрос не отвечать, под нажатой или подсвеченной кнопкой остаются
+           разводы от предыдущей отрисовки. Поэтому полосу под панелью красим цветом кнопок. */
+        RECT band;
+        GetClientRect(hWnd, &band);
+        band.bottom = g_tbH;
+        FillRect((HDC)wParam, &band, GetSysColorBrush(COLOR_BTNFACE));
+        return 1;
+    }
     case WM_VSCROLL: {
         int viewH, page, y;
         PvView(hWnd, &rc);
