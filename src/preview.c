@@ -43,6 +43,10 @@ static int g_scrollY;
 static FontEntry g_fonts[48];
 static int g_fontCount;
 static HWND g_hPv;
+static unsigned char *g_job; /* копия потока — для кнопки «Печать» в окне */
+static DWORD g_jobLen;
+#define PV_CMD_PRINT 1
+#define PV_CMD_CLOSE 2
 
 static HFONT GetPvFont(int h, int w, int weight)
 {
@@ -65,6 +69,8 @@ static void FreePv(void)
     for (i = 0; i < g_fontCount; i++) if (g_fonts[i].f) DeleteObject(g_fonts[i].f);
     g_fontCount = 0;
     if (g_gl) { HeapFree(GetProcessHeap(), 0, g_gl); g_gl = NULL; }
+    if (g_job) { HeapFree(GetProcessHeap(), 0, g_job); g_job = NULL; }
+    g_jobLen = 0;
     g_glCount = 0;
     g_hPv = NULL;
 }
@@ -266,7 +272,17 @@ static LRESULT CALLBACK PvProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam
         InvalidateRect(hWnd, NULL, FALSE);
         return 0;
     }
+    case WM_COMMAND:
+        if (LOWORD(wParam) == PV_CMD_PRINT && g_job) {
+            char err[256] = "";
+            if (!Sm6337_PrintRaw(g_job, g_jobLen, err, 256))
+                MessageBoxA(hWnd, err, "Ошибка печати", MB_OK | MB_ICONERROR);
+        } else if (LOWORD(wParam) == PV_CMD_CLOSE) {
+            DestroyWindow(hWnd);
+        }
+        return 0;
     case WM_KEYDOWN:
+        if (wParam == 'P' && (GetKeyState(VK_CONTROL) & 0x8000)) { SendMessageA(hWnd, WM_COMMAND, PV_CMD_PRINT, 0); return 0; }
         switch (wParam) {
         case VK_ESCAPE: DestroyWindow(hWnd); return 0;
         case VK_UP: SendMessageA(hWnd, WM_VSCROLL, SB_LINEUP, 0); return 0;
@@ -297,6 +313,8 @@ void Sm6337_ShowPreview(HWND owner, HINSTANCE hInst, const unsigned char *job, D
         RegisterClassA(&wc);
         registered = TRUE;
     }
+    g_job = (unsigned char *)HeapAlloc(GetProcessHeap(), 0, len ? len : 1);
+    if (g_job) { memcpy(g_job, job, len); g_jobLen = len; }
     if (!ParseJob(job, len, s)) {
         MessageBoxA(owner, "Не хватило памяти для предпросмотра.", "Предпросмотр", MB_OK | MB_ICONERROR);
         return;
@@ -306,8 +324,14 @@ void Sm6337_ShowPreview(HWND owner, HINSTANCE hInst, const unsigned char *job, D
     char title[80] = "Предпросмотр печати — страниц: ";
     char n[12]; UIntToStrA((unsigned long)g_pages, n);
     strcat(title, n);
+    HMENU hMenu = CreateMenu();
+    HMENU hFile = CreatePopupMenu();
+    AppendMenuA(hFile, MF_STRING, PV_CMD_PRINT, "&Печать\tCtrl+P");
+    AppendMenuA(hFile, MF_SEPARATOR, 0, NULL);
+    AppendMenuA(hFile, MF_STRING, PV_CMD_CLOSE, "&Закрыть\tEsc");
+    AppendMenuA(hMenu, MF_POPUP, (UINT_PTR)hFile, "&Файл");
     g_hPv = CreateWindowA("SM6337PreviewClass", title,
         WS_OVERLAPPEDWINDOW | WS_VSCROLL | WS_VISIBLE,
-        CW_USEDEFAULT, CW_USEDEFAULT, 760, 560, owner, NULL, hInst, NULL);
+        CW_USEDEFAULT, CW_USEDEFAULT, 760, 560, owner, hMenu, hInst, NULL);
     if (g_hPv) { UpdateScroll(g_hPv); SetFocus(g_hPv); }
 }
