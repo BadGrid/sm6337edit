@@ -4,6 +4,7 @@
 #include "resource.h"
 #include "version.h"
 
+IDI_APP      ICON   "redist/icons/app.ico"
 IDB_TOOLBAR  BITMAP "redist/icons/toolbar.bmp"
 IDR_RICHED20 RCDATA "redist/riched20.dll"
 IDR_RICHED32 RCDATA "redist/riched32.dll"

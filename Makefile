@@ -11,7 +11,7 @@ RES := obj/app_res.o
 OUT := build/sm6337edit.exe
 
 # Всё, что нужно программе, встраивается в exe ресурсами (src/app.rc): иконки, RichEdit, шрифты, справка.
-RESFILES := redist/icons/toolbar.bmp redist/riched20.dll redist/riched32.dll \
+RESFILES := redist/icons/app.ico redist/icons/toolbar.bmp redist/riched20.dll redist/riched32.dll \
             redist/fonts/sm6337-10.ttf redist/fonts/sm6337-12.ttf redist/fonts/sm6337-17.ttf \
             redist/fonts/sm6337-w.ttf redist/fonts/OFL.txt redist/sm6337edit.hlp help/sm6337edit.cnt
 

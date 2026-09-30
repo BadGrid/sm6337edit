@@ -60,6 +60,7 @@
 #define IDC_CHK_FILENAME    2016
 
 /* встроенные в exe ресурсы (см. app.rc): иконки тулбара, DLL RichEdit, шрифты, справка */
+#define IDI_APP             100
 #define IDB_TOOLBAR         9001
 #define IDR_RICHED20        9002
 #define IDR_RICHED32        9003
