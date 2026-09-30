@@ -26,10 +26,10 @@ jobs:
       - name: Номер версии из тега
         run: |
           tag="${{ github.event.inputs.tag }}"
-          ver="${tag#v}"; ver="${ver%%-*}"
+          full="${tag#v}"; ver="${full%%-*}"
           IFS=. read -r MA MI PA <<< "$ver"
           if ! [[ "$MA" =~ ^[0-9]+$ && "$MI" =~ ^[0-9]+$ && "$PA" =~ ^[0-9]+$ ]]; then echo "Тег должен быть вида vX.Y.Z (например v0.2.0), получено: $tag"; exit 1; fi
-          printf '#ifndef VERSION_H\n#define VERSION_H\n#define SM_VER_MAJOR %s\n#define SM_VER_MINOR %s\n#define SM_VER_PATCH %s\n#define SM_VER_STR   "%s.%s.%s"\n#endif\n' "$MA" "$MI" "$PA" "$MA" "$MI" "$PA" > src/version.h
+          printf '#ifndef VERSION_H\n#define VERSION_H\n#define SM_VER_MAJOR %s\n#define SM_VER_MINOR %s\n#define SM_VER_PATCH %s\n#define SM_VER_STR   "%s"\n#endif\n' "$MA" "$MI" "$PA" "$full" > src/version.h
           cat src/version.h
 
       - name: Собрать
@@ -57,7 +57,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "${{ github.event.inputs.tag }}" \
+          pre=""; case "${{ github.event.inputs.tag }}" in *-*) pre="--prerelease";; esac
+          gh release create "${{ github.event.inputs.tag }}" $pre \
             build/sm6337edit.exe \
             "sm6337edit-full-${{ github.event.inputs.tag }}.zip" \
             --title "SM6337 Edit ${{ github.event.inputs.tag }}" \
