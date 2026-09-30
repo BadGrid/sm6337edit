@@ -15,6 +15,7 @@
 #include "resource.h"
 #include "printer.h"
 #include "preview.h"
+#include "version.h"
 
 static HWND g_hEdit;
 static HWND g_hStatus;
@@ -1617,7 +1618,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
             }
             return 0;
         case IDM_HELP_ABOUT:
-            MessageBoxA(hWnd, "SM6337 Edit\nРедактор для Windows 98 SE с прямой печатью на принтер СМ6337 (без драйвера, через LPT1).",
+            MessageBoxA(hWnd, "SM6337 Edit, версия " SM_VER_STR "\nРедактор для Windows 98 SE с прямой печатью на принтер СМ6337 (без драйвера, через LPT1).\n\nИсходный код и сообщения об ошибках: github.com/BadGrid/sm6337edit",
                 "О программе", MB_OK | MB_ICONINFORMATION);
             return 0;
         case IDM_FILE_PRINTPREVIEW: {

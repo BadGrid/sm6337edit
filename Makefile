@@ -23,10 +23,10 @@ build:
 obj:
 	mkdir -p obj
 
-$(RES): src/app.rc src/resource.h $(RESFILES) | obj
+$(RES): src/app.rc src/resource.h src/version.h $(RESFILES) | obj
 	$(WINDRES) -Isrc -I. -O coff src/app.rc -o $(RES)
 
-$(OUT): $(SRC) src/resource.h src/printer.h src/preview.h $(RES) | build
+$(OUT): $(SRC) src/resource.h src/printer.h src/preview.h src/version.h $(RES) | build
 	$(CC) $(CFLAGS) $(SRC) $(RES) -o $(OUT) $(LIBS)
 
 # Версия со всеми файлами рядом с exe: можно подменить любую DLL, шрифт, иконки или справку

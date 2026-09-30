@@ -23,6 +23,15 @@ jobs:
           sudo apt-get update -q
           sudo apt-get install -y -q gcc-mingw-w64-i686
 
+      - name: Номер версии из тега
+        run: |
+          tag="${{ github.event.inputs.tag }}"
+          ver="${tag#v}"; ver="${ver%%-*}"
+          IFS=. read -r MA MI PA <<< "$ver"
+          if ! [[ "$MA" =~ ^[0-9]+$ && "$MI" =~ ^[0-9]+$ && "$PA" =~ ^[0-9]+$ ]]; then echo "Тег должен быть вида vX.Y.Z (например v0.2.0), получено: $tag"; exit 1; fi
+          printf '#ifndef VERSION_H\n#define VERSION_H\n#define SM_VER_MAJOR %s\n#define SM_VER_MINOR %s\n#define SM_VER_PATCH %s\n#define SM_VER_STR   "%s.%s.%s"\n#endif\n' "$MA" "$MI" "$PA" "$MA" "$MI" "$PA" > src/version.h
+          cat src/version.h
+
       - name: Собрать
         run: |
           mkdir -p build obj

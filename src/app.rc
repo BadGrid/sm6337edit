@@ -1,6 +1,8 @@
-/* ???????, ?????????? ? exe: ????????? ??????????? ????? ??????. ???? ? ?? ????? ???????????
-   (windres ??????????? ?? ?????, ??. Makefile ? workflow). */
+/* Ресурсы, встроенные в exe: программа запускается одним файлом. Пути - от корня репозитория
+   (windres запускается из корня, см. Makefile и workflow). */
+#include <winver.h>
 #include "resource.h"
+#include "version.h"
 
 IDB_TOOLBAR  BITMAP "redist/icons/toolbar.bmp"
 IDR_RICHED20 RCDATA "redist/riched20.dll"
@@ -12,3 +14,28 @@ IDR_FONTW    RCDATA "redist/fonts/sm6337-w.ttf"
 IDR_FONTLICENSE RCDATA "redist/fonts/OFL.txt"
 IDR_HELP     RCDATA "redist/sm6337edit.hlp"
 IDR_HELPCNT  RCDATA "help/sm6337edit.cnt"
+
+/* Свойства файла (правая кнопка -> Свойства -> Версия) */
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION SM_VER_MAJOR, SM_VER_MINOR, SM_VER_PATCH, 0
+ PRODUCTVERSION SM_VER_MAJOR, SM_VER_MINOR, SM_VER_PATCH, 0
+ FILEOS VOS__WINDOWS32
+ FILETYPE VFT_APP
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "FileDescription", "SM6337 Edit - text editor for Windows 98 with direct SM6337 printing"
+            VALUE "FileVersion", SM_VER_STR
+            VALUE "ProductName", "SM6337 Edit"
+            VALUE "ProductVersion", SM_VER_STR
+            VALUE "OriginalFilename", "sm6337edit.exe"
+            VALUE "LegalCopyright", "MIT License"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 1200
+    END
+END
