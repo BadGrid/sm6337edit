@@ -50,6 +50,9 @@ static int g_tbH;         /* её высота: лист рисуется ниж
 static float g_pageHeightPx = 16.0f * 70; /* физическая высота листа, px при 96 dpi */
 static float g_originX = 12.0f; /* где начинается печать от левого края листа, px */
 static float g_paperW = 794.0f; /* ширина листа: книжный 794, альбомный 1123 px */
+/* ширина всего, что надо показать: лист плюс то, что выходит за его правый край (если строка длиннее
+   листа — например, лимит 120 знаков на листе, где помещается 82). Выступающее рисуем за краем листа. */
+static float g_contentW = 794.0f;
 static unsigned char *g_job; /* копия потока — для кнопки «Печать» в окне */
 static DWORD g_jobLen;
 #define PV_CMD_PRINT 1
@@ -128,6 +131,7 @@ static BOOL ParseJob(const unsigned char *job, DWORD len, const Sm6337Settings *
     int index = 0;
     int page = 0, line = 0;
     float x = marginPx;
+    float maxRight = 0.0f; /* самый правый край знаков, px от левого края листа */
     DWORD p = 0;
 
     while (p < len) {
@@ -178,7 +182,10 @@ static BOOL ParseJob(const unsigned char *job, DWORD len, const Sm6337Settings *
         g->flags = (unsigned char)((bold ? GF_BOLD : 0) | (under ? GF_UNDER : 0) | (dstrike ? GF_DSTRIKE : 0) |
             (index == 1 ? GF_SUP : 0) | (index == 2 ? GF_SUB : 0));
         x += cell;
+        if (g->x + cell > maxRight) maxRight = g->x + cell;
     }
+    g_contentW = PV_PAPER_W;
+    if (maxRight + 6.0f > g_contentW) g_contentW = maxRight + 6.0f; /* строка шире листа: показать, насколько */
     g_pages = page + 1;
     if (g_glCount == 0) g_pages = 1;
     return TRUE;
@@ -200,7 +207,7 @@ static float PvScale(int viewW)
 {
     float sc;
     if (g_zoom > 0.0f) return g_zoom;
-    sc = ((float)viewW - 2 * PV_GAP_PX) / PV_PAPER_W;
+    sc = ((float)viewW - 2 * PV_GAP_PX) / g_contentW;
     if (sc > 1.5f) sc = 1.5f;
     if (sc < 0.3f) sc = 0.3f;
     return sc;
@@ -210,7 +217,7 @@ static int PvPageH(float sc) { return (int)((PV_TOP_PX * 2 + g_pageHeightPx) * s
 
 static int PvTotalH(float sc) { return (int)(PV_GAP_PX + (float)g_pages * ((float)PvPageH(sc) + PV_GAP_PX)); }
 
-static int PvTotalW(float sc) { return (int)(PV_PAPER_W * sc + 2 * PV_GAP_PX); }
+static int PvTotalW(float sc) { return (int)(g_contentW * sc + 2 * PV_GAP_PX); }
 
 static void PvView(HWND hWnd, RECT *rc)
 {
@@ -257,11 +264,11 @@ static void UpdateScroll(HWND hWnd)
 static void PaintPv(HWND hWnd, HDC hdc)
 {
     RECT rc;
-    int viewW, viewH, pageH, pageW, left, pg, i;
+    int viewW, viewH, pageH, pageW, contentPx, left, pg, i;
     float sc;
     HDC mem;
     HBITMAP bmp, oldBmp;
-    HBRUSH bg, paper;
+    HBRUSH bg, paper, outside, edge;
     RECT all;
 
     PvView(hWnd, &rc);
@@ -276,7 +283,8 @@ static void PaintPv(HWND hWnd, HDC hdc)
     sc = PvScale(viewW);
     pageH = PvPageH(sc);
     pageW = (int)(PV_PAPER_W * sc);
-    left = (pageW + 2 * (int)PV_GAP_PX <= viewW) ? (viewW - pageW) / 2 : (int)PV_GAP_PX - g_scrollX;
+    contentPx = (int)(g_contentW * sc);
+    left = (contentPx + 2 * (int)PV_GAP_PX <= viewW) ? (viewW - contentPx) / 2 : (int)PV_GAP_PX - g_scrollX;
 
     all.left = 0; all.top = 0; all.right = viewW; all.bottom = viewH;
     bg = CreateSolidBrush(RGB(128, 128, 128));
@@ -284,15 +292,33 @@ static void PaintPv(HWND hWnd, HDC hdc)
     DeleteObject(bg);
 
     paper = CreateSolidBrush(RGB(255, 255, 255));
+    outside = CreateSolidBrush(RGB(255, 218, 218));   /* то, что выходит за правый край листа */
+    edge = CreateSolidBrush(RGB(200, 0, 0));
     for (pg = 0; pg < g_pages; pg++) {
         RECT r;
         int top = (int)(PV_GAP_PX + (float)pg * ((float)pageH + PV_GAP_PX)) - g_scrollY;
         if (top > viewH || top + pageH < 0) continue;
+        if (contentPx > pageW) {
+            /* строка шире листа: светло-красная полоса за краем листа и красная черта по краю бумаги —
+               видно, что окажется «на валике» и насколько далеко */
+            RECT o, e;
+            o.left = left + pageW; o.top = top; o.right = left + contentPx; o.bottom = top + pageH;
+            FillRect(mem, &o, outside);
+            e.left = left + pageW - 1; e.top = top; e.right = left + pageW + 1; e.bottom = top + pageH;
+            FillRect(mem, &e, edge);
+        }
         r.left = left; r.top = top; r.right = left + pageW; r.bottom = top + pageH;
         FillRect(mem, &r, paper);
         FrameRect(mem, &r, (HBRUSH)GetStockObject(BLACK_BRUSH));
+        if (contentPx > pageW) {
+            RECT e;
+            e.left = left + pageW - 1; e.top = top; e.right = left + pageW + 1; e.bottom = top + pageH;
+            FillRect(mem, &e, edge);   /* красная граница поверх чёрной рамки */
+        }
     }
     DeleteObject(paper);
+    DeleteObject(outside);
+    DeleteObject(edge);
 
     SetBkMode(mem, TRANSPARENT);
     SetTextColor(mem, RGB(0, 0, 0));
@@ -564,6 +590,13 @@ void Sm6337_ShowPreview(HWND owner, HINSTANCE hInst, const unsigned char *job, D
     UIntToStrA((unsigned long)g_linesPerPage, n); strcat(title, n);
     if (s->leftMargin > 0) { strcat(title, ", поле: "); UIntToStrA((unsigned long)s->leftMargin, n); strcat(title, n); }
     if (s->landscape) strcat(title, ", альбомная");
+    if (g_contentW > PV_PAPER_W + 0.5f) {
+        /* сколько колонок (по 10 знаков на дюйм) выходит за правый край листа */
+        int over = (int)((g_contentW - 6.0f - PV_PAPER_W) / PV_PICA_PX + 0.5f);
+        if (over < 1) over = 1;
+        UIntToStrA((unsigned long)over, n);
+        strcat(title, ", за краем листа: "); strcat(title, n); strcat(title, " кол.");
+    }
     hMenu = CreateMenu();
     hFile = CreatePopupMenu();
     AppendMenuA(hFile, MF_STRING, PV_CMD_PRINT, "&Печать\tCtrl+P");
