@@ -10,6 +10,7 @@
 #define IDM_FILE_PRINT      105
 #define IDM_FILE_PRINTSETUP 106
 #define IDM_FILE_EXIT       107
+#define IDM_FILE_PRINTPREVIEW 108
 
 #define IDM_EDIT_UNDO       201
 #define IDM_EDIT_CUT        202

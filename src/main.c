@@ -13,6 +13,7 @@
 #include <stdlib.h>
 #include "resource.h"
 #include "printer.h"
+#include "preview.h"
 
 static HWND g_hEdit;
 static HWND g_hStatus;
@@ -482,6 +483,7 @@ static HMENU BuildMenu(void)
     AppendMenuA(hFile, MF_STRING, IDM_FILE_SAVE, "&Сохранить\tCtrl+S");
     AppendMenuA(hFile, MF_STRING, IDM_FILE_SAVEAS, "Сохранить &как...");
     AppendMenuA(hFile, MF_SEPARATOR, 0, NULL);
+    AppendMenuA(hFile, MF_STRING, IDM_FILE_PRINTPREVIEW, "Пред&просмотр печати...");
     AppendMenuA(hFile, MF_STRING, IDM_FILE_PRINT, "&Печать\tCtrl+P");
     AppendMenuA(hFile, MF_STRING, IDM_FILE_PRINTSETUP, "Параметры &печати (СМ6337)...");
     AppendMenuA(hFile, MF_SEPARATOR, 0, NULL);
@@ -813,6 +815,7 @@ static const char *ToolbarTip(UINT id)
     case IDM_FILE_OPEN: return "Открыть";
     case IDM_FILE_SAVE: return "Сохранить";
     case IDM_FILE_PRINT: return "Печать";
+    case IDM_FILE_PRINTPREVIEW: return "Предпросмотр печати";
     case IDM_FILE_PRINTSETUP: return "Настройка печати";
     case IDM_EDIT_CUT: return "Вырезать";
     case IDM_EDIT_COPY: return "Копировать";
@@ -881,6 +884,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
             btns[bi].iBitmap = STD_FILEOPEN; btns[bi].idCommand = IDM_FILE_OPEN; btns[bi].fsState = TBSTATE_ENABLED; btns[bi].fsStyle = TBSTYLE_BUTTON; bi++;
             btns[bi].iBitmap = STD_FILESAVE; btns[bi].idCommand = IDM_FILE_SAVE; btns[bi].fsState = TBSTATE_ENABLED; btns[bi].fsStyle = TBSTYLE_BUTTON; bi++;
             btns[bi].fsStyle = TBSTYLE_SEP; bi++;
+            btns[bi].iBitmap = STD_PRINTPRE; btns[bi].idCommand = IDM_FILE_PRINTPREVIEW; btns[bi].fsState = TBSTATE_ENABLED; btns[bi].fsStyle = TBSTYLE_BUTTON; bi++;
             btns[bi].iBitmap = STD_PRINT; btns[bi].idCommand = IDM_FILE_PRINT; btns[bi].fsState = TBSTATE_ENABLED; btns[bi].fsStyle = TBSTYLE_BUTTON; bi++;
             if (idxSetup >= 0) {
                 btns[bi].iBitmap = idxSetup; btns[bi].idCommand = IDM_FILE_PRINTSETUP; btns[bi].fsState = TBSTATE_ENABLED; btns[bi].fsStyle = TBSTYLE_BUTTON; bi++;
@@ -1190,6 +1194,28 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
             MessageBoxA(hWnd, "SM6337 Edit\nРедактор для Windows 98 SE с прямой печатью на принтер СМ6337 (без драйвера, через LPT1).",
                 "О программе", MB_OK | MB_ICONINFORMATION);
             return 0;
+        case IDM_FILE_PRINTPREVIEW: {
+            Sm6337Settings settings;
+            settings.codeTable = g_codeTable;
+            settings.avoidFormFeed = g_avoidFormFeed;
+            settings.pageMode = g_pageMode;
+            settings.cols = g_cols;
+            settings.lines = g_lines;
+            settings.feedLinesAfterPrint = g_feedLinesAfterPrint;
+            settings.unidirectional = g_unidirectional;
+            settings.lineSpacing = g_lineSpacing;
+            settings.leftMargin = g_leftMargin;
+
+            int lineCount = 0; DWORD jobLen = 0;
+            unsigned char *job = BuildPrintJob(&settings, &lineCount, &jobLen);
+            if (!job) {
+                MessageBoxA(hWnd, "Не хватило памяти для подготовки предпросмотра.", "Предпросмотр", MB_OK | MB_ICONERROR);
+                return 0;
+            }
+            Sm6337_ShowPreview(hWnd, GetModuleHandleA(NULL), job, jobLen, &settings);
+            HeapFree(GetProcessHeap(), 0, job);
+            return 0;
+        }
         case IDM_FILE_PRINT: {
             Sm6337Settings settings;
             settings.codeTable = g_codeTable;
