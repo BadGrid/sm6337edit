@@ -30,6 +30,7 @@ jobs:
           cp redist/icons/toolbar.bmp build/
           cp help/sm6337edit.cnt build/
           cp redist/sm6337edit.hlp build/ || true
+          cp redist/fonts/*.ttf redist/fonts/OFL.txt build/ || true
 
       - name: Загрузить build/
         uses: actions/upload-artifact@v4

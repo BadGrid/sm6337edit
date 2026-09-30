@@ -19,6 +19,7 @@ $(OUT): $(SRC) src/resource.h src/printer.h src/preview.h | build
 	cp redist/icons/toolbar.bmp build/
 	cp help/sm6337edit.cnt build/
 	-cp redist/sm6337edit.hlp build/
+	-cp redist/fonts/*.ttf redist/fonts/OFL.txt build/
 
 clean:
 	rm -rf build

@@ -542,15 +542,61 @@ static HMENU BuildMenu(void)
    шрифта (округляются до одного растра — были одинаковые), а двумя разными шрифтами.
    cpi нужен, чтобы правильно считать, сколько символов физически влезает в строку
    (g_cols откалиброван для Pica 10cpi — при более узком шаге в ту же строку влезает больше). */
-#define SM_PITCH_FACE_ELITE     "Terminal"
-#define SM_PITCH_FACE_CONDENSED "Small Fonts"
-#define SM_PITCH_FACE_NORMAL    "Courier New"
+/* Шрифты шага печати. Если рядом с exe лежат три шрифта sm6337-10/12/17.ttf (одно
+   семейство Noto Sans Mono с разной шириной знака при одной высоте), берём их — тогда
+   при смене шага буквы меняются только по ширине. Если файлов нет, откат на старую
+   схему из системных шрифтов (Courier New / Terminal / Small Fonts). */
+#define SM_FONT_OWN_NORMAL "SM6337 Mono 10"
+#define SM_FONT_OWN_ELITE  "SM6337 Mono 12"
+#define SM_FONT_OWN_COND   "SM6337 Mono 17"
+static const char *g_faceNormal = "Courier New";
+static const char *g_faceElite = "Terminal";
+static const char *g_faceCond = "Small Fonts";
+static const char *g_fontFiles[3] = { "sm6337-10.ttf", "sm6337-12.ttf", "sm6337-17.ttf" };
+static char g_fontPaths[3][MAX_PATH];
+static int g_fontsLoaded = 0;
+
+#define SM_PITCH_FACE_ELITE     g_faceElite
+#define SM_PITCH_FACE_CONDENSED g_faceCond
+#define SM_PITCH_FACE_NORMAL    g_faceNormal
+
+/* Подключает шрифты из папки exe на время работы программы. Всё или ничего: если хоть
+   один не подключился, снимаем уже подключённые и остаёмся на системных шрифтах. */
+static void LoadPitchFonts(const char *exeDir)
+{
+    int i, ok = 0;
+    for (i = 0; i < 3; i++) {
+        strcpy(g_fontPaths[i], exeDir);
+        strcat(g_fontPaths[i], g_fontFiles[i]);
+        if (GetFileAttributesA(g_fontPaths[i]) != 0xFFFFFFFF && AddFontResourceA(g_fontPaths[i]) > 0) ok++;
+        else break;
+    }
+    if (ok == 3) {
+        g_faceNormal = SM_FONT_OWN_NORMAL;
+        g_faceElite = SM_FONT_OWN_ELITE;
+        g_faceCond = SM_FONT_OWN_COND;
+        g_fontsLoaded = 3;
+        SendMessageA(HWND_BROADCAST, WM_FONTCHANGE, 0, 0);
+    } else {
+        for (i = 0; i < ok; i++) RemoveFontResourceA(g_fontPaths[i]);
+    }
+}
+
+static void UnloadPitchFonts(void)
+{
+    int i;
+    for (i = 0; i < g_fontsLoaded; i++) RemoveFontResourceA(g_fontPaths[i]);
+    if (g_fontsLoaded) SendMessageA(HWND_BROADCAST, WM_FONTCHANGE, 0, 0);
+    g_fontsLoaded = 0;
+}
 
 static double PitchCpiFromFormat(const char *face, long yHeight, BOOL *outElite, BOOL *outCondensed, BOOL *outExpanded)
 {
     *outElite = FALSE; *outCondensed = FALSE; *outExpanded = FALSE;
-    if (strcmp(face, SM_PITCH_FACE_ELITE) == 0)     { *outElite = TRUE; return 12.0; }
-    if (strcmp(face, SM_PITCH_FACE_CONDENSED) == 0) { *outCondensed = TRUE; return 17.16; }
+    /* старые названия оставляем распознаваемыми: в .rtf, сохранённых до перехода на
+       свои шрифты, шаг записан именно ими */
+    if (strcmp(face, SM_PITCH_FACE_ELITE) == 0 || strcmp(face, "Terminal") == 0)     { *outElite = TRUE; return 12.0; }
+    if (strcmp(face, SM_PITCH_FACE_CONDENSED) == 0 || strcmp(face, "Small Fonts") == 0) { *outCondensed = TRUE; return 17.16; }
     if (yHeight >= 260) { *outExpanded = TRUE; return 5.0; } /* Pica+Expanded — вдвое шире */
     return 10.0;
 }
@@ -936,7 +982,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
         g_hFont = CreateFontA(
             -14, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
             RUSSIAN_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-            DEFAULT_QUALITY, FIXED_PITCH | FF_MODERN, "Courier New");
+            DEFAULT_QUALITY, FIXED_PITCH | FF_MODERN, g_faceNormal);
         SendMessageA(g_hEdit, WM_SETFONT, (WPARAM)g_hFont, TRUE);
 
         {
@@ -945,7 +991,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
             cf.dwMask = CFM_FACE | CFM_SIZE | CFM_CHARSET;
             cf.yHeight = 200; /* 10pt в твипах*20 */
             cf.bCharSet = RUSSIAN_CHARSET;
-            strcpy(cf.szFaceName, "Courier New");
+            strcpy(cf.szFaceName, g_faceNormal);
             SendMessageA(g_hEdit, EM_SETCHARFORMAT, SCF_DEFAULT, (LPARAM)&cf);
         }
 
@@ -1340,6 +1386,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
     case WM_DESTROY:
         KillTimer(hWnd, TB_TIMER_ID);
         if (g_helpPath[0]) WinHelpA(hWnd, g_helpPath, HELP_QUIT, 0);
+        UnloadPitchFonts();
         if (g_hFont) DeleteObject(g_hFont);
         PostQuitMessage(0);
         return 0;
@@ -1362,6 +1409,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         }
 
         strcpy(g_helpPath, exePathA); strcat(g_helpPath, "sm6337edit.hlp");
+        LoadPitchFonts(exePathA);
 
         CreateDirectoryA("C:\\edit", NULL); /* игнорируем ошибку — важно только чтобы папка была */
         strcpy(g_iniPath, "C:\\edit\\sm6337.ini");
