@@ -1269,7 +1269,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
                riched20.dll — полный контроль, без зависимости от того, что
                реально лежит в comctl32.dll. */
             int idxSetup = -1;
-            HBITMAP hStrip = (HBITMAP)LoadImageA(GetModuleHandleA(NULL), MAKEINTRESOURCEA(IDB_TOOLBAR), IMAGE_BITMAP, 0, 0, 0);
+            HBITMAP hStrip = Sm6337_LoadToolbarStrip();
             HIMAGELIST himl = ImageList_Create(16, 16, ILC_COLOR24 | ILC_MASK, 16, 4);
             if (hStrip) {
                 ImageList_AddMasked(himl, hStrip, RGB(192, 192, 192));
@@ -1842,7 +1842,19 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     char dllPath20[MAX_PATH] = "", dllPath32[MAX_PATH] = "";
     DWORD err20 = 0, err32 = 0;
     {
-        PrepareResourceDir(hInstance, exePathA);
+        /* Версия «со всеми файлами»: если рядом с exe лежит riched20.dll, берём DLL, шрифты, справку и
+           иконки оттуда, ничего не распаковывая (можно подменить любой файл). Иначе — из встроенных
+           ресурсов, распакованных в %TEMP%\SM6337Edit\. */
+        {
+            char beside[MAX_PATH];
+            if (Sm6337_FileBesideExe("riched20.dll", beside, MAX_PATH)) {
+                char *sl2 = strrchr(beside, '\\');
+                if (sl2) *(sl2 + 1) = 0;
+                strcpy(exePathA, beside);
+            } else {
+                PrepareResourceDir(hInstance, exePathA);
+            }
+        }
 
         strcpy(g_helpPath, exePathA); strcat(g_helpPath, "sm6337edit.hlp");
         LoadPitchFonts(exePathA);

@@ -35,12 +35,22 @@ jobs:
             -o build/sm6337edit.exe \
             -lcomctl32 -lcomdlg32 -lgdi32 -lshell32
 
+      - name: Упаковать версию со всеми файлами
+        run: |
+          mkdir -p full
+          cp build/sm6337edit.exe full/
+          cp redist/riched20.dll redist/riched32.dll redist/icons/toolbar.bmp redist/sm6337edit.hlp help/sm6337edit.cnt full/
+          cp redist/fonts/*.ttf redist/fonts/OFL.txt full/
+          cd full
+          zip -r "../sm6337edit-full-${{ github.event.inputs.tag }}.zip" .
+
       - name: Создать релиз
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "${{ github.event.inputs.tag }}" \
             build/sm6337edit.exe \
+            "sm6337edit-full-${{ github.event.inputs.tag }}.zip" \
             --title "SM6337 Edit ${{ github.event.inputs.tag }}" \
             --generate-notes \
             --target "${{ github.sha }}"

@@ -51,10 +51,17 @@ text comes out crisp, as if printed from the printer's own ROM font.
 
 ## Download
 
-A ready-made build is a single file, `sm6337edit.exe`: RichEdit, icons, fonts and help are embedded in it.
-It is published in [Releases](../../releases); copy it to a Win98 SE machine and run it. On startup the
-program unpacks the embedded DLLs, fonts and help into `%TEMP%\SM6337Edit\` (files already there are not
-rewritten). Report problems through [Issues](../../issues/new/choose).
+[Releases](../../releases) has two variants of the same program:
+
+- **`sm6337edit.exe`** — a single file: RichEdit, icons, fonts and help are embedded in it. Copy it to a
+  Win98 SE machine and run it. On startup the program unpacks the embedded DLLs, fonts and help into
+  `%TEMP%\SM6337Edit\` (files already there are not rewritten).
+- **`sm6337edit-full-<version>.zip`** — the same, with all the files next to the exe (`riched20.dll`,
+  `riched32.dll`, `toolbar.bmp`, `sm6337edit.hlp`/`.cnt`, the `sm6337-*.ttf` fonts, `OFL.txt`).
+  If `riched20.dll` lies next to the exe, the program takes everything from its own folder and unpacks
+  nothing — so you can swap any DLL, font, icons or help, and nothing is written to the temp folder.
+
+Report problems through [Issues](../../issues/new/choose).
 
 ## Building
 
@@ -69,7 +76,8 @@ make
 ```
 
 The result is a single file, `build/sm6337edit.exe` (about 800 KB): icons, RichEdit, fonts and help are
-embedded into it as resources (`src/app.rc`), nothing else has to be copied.
+embedded into it as resources (`src/app.rc`), nothing else has to be copied. `make full` additionally builds
+the `build-full/` folder — the variant with all the files next to the exe.
 
 ### GitHub Actions
 

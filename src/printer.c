@@ -1,6 +1,7 @@
 /* Кодировка и raw-печать на LPT1 для СМ6337. См. printer_commands.md за деталями команд/таблиц.
    Текст приходит из ANSI RichEdit-контрола в кодировке Windows-1251 (CP1251). */
 #include "printer.h"
+#include "resource.h"
 #include <string.h>
 
 /* CP1251 -> Unicode codepoint для кириллического диапазона (остальное — ASCII один-в-один). */
@@ -77,4 +78,29 @@ BOOL Sm6337_PrintRaw(const unsigned char *bytes, DWORD len, char *errMsg, int er
 
     CloseHandle(hPort);
     return ok;
+}
+
+/* Полный путь к файлу рядом с exe; TRUE, если такой файл существует. */
+BOOL Sm6337_FileBesideExe(const char *name, char *outPath, int outSize)
+{
+    char *sl;
+    if (outSize < MAX_PATH) return FALSE;
+    if (GetModuleFileNameA(NULL, outPath, (DWORD)outSize) == 0) return FALSE;
+    sl = strrchr(outPath, '\\');
+    if (!sl) return FALSE;
+    *(sl + 1) = 0;
+    if (strlen(outPath) + strlen(name) + 1 > (size_t)outSize) return FALSE;
+    strcat(outPath, name);
+    return GetFileAttributesA(outPath) != 0xFFFFFFFF;
+}
+
+HBITMAP Sm6337_LoadToolbarStrip(void)
+{
+    char path[MAX_PATH];
+    HBITMAP h = NULL;
+    if (Sm6337_FileBesideExe("toolbar.bmp", path, MAX_PATH))
+        h = (HBITMAP)LoadImageA(NULL, path, IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
+    if (!h)
+        h = (HBITMAP)LoadImageA(GetModuleHandleA(NULL), MAKEINTRESOURCEA(IDB_TOOLBAR), IMAGE_BITMAP, 0, 0, 0);
+    return h;
 }

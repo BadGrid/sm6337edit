@@ -40,4 +40,11 @@ BOOL Sm6337_EncodeChar(unsigned char cp1251Byte, int codeTable, unsigned char *o
    Возвращает TRUE при успехе, иначе errMsg заполняется описанием ошибки. */
 BOOL Sm6337_PrintRaw(const unsigned char *bytes, DWORD len, char *errMsg, int errMsgSize);
 
+/* Полоса иконок тулбара 16x16: toolbar.bmp рядом с exe, если лежит (версия «со всеми файлами»),
+   иначе встроенный ресурс IDB_TOOLBAR. Освободить DeleteObject. NULL — не нашлась. */
+HBITMAP Sm6337_LoadToolbarStrip(void);
+
+/* Есть ли файл с таким именем в папке программы (для режима «рядом лежат все файлы»). */
+BOOL Sm6337_FileBesideExe(const char *name, char *outPath, int outSize);
+
 #endif

@@ -29,7 +29,14 @@ $(RES): src/app.rc src/resource.h $(RESFILES) | obj
 $(OUT): $(SRC) src/resource.h src/printer.h src/preview.h $(RES) | build
 	$(CC) $(CFLAGS) $(SRC) $(RES) -o $(OUT) $(LIBS)
 
-clean:
-	rm -rf build obj
+# Версия со всеми файлами рядом с exe: можно подменить любую DLL, шрифт, иконки или справку
+full: $(OUT)
+	mkdir -p build-full
+	cp $(OUT) build-full/
+	cp redist/riched20.dll redist/riched32.dll redist/icons/toolbar.bmp redist/sm6337edit.hlp help/sm6337edit.cnt build-full/
+	cp redist/fonts/*.ttf redist/fonts/OFL.txt build-full/
 
-.PHONY: all clean
+clean:
+	rm -rf build obj build-full
+
+.PHONY: all full clean

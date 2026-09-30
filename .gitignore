@@ -18,3 +18,4 @@ tools/ocrspace.sh
 *.gid
 *.fts
 obj/
+build-full/

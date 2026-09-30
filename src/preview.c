@@ -362,7 +362,7 @@ static void PaintPv(HWND hWnd, HDC hdc)
 static void CreatePvToolbar(HWND hWnd)
 {
     HIMAGELIST himl = NULL;
-    HBITMAP hStrip = (HBITMAP)LoadImageA(GetModuleHandleA(NULL), MAKEINTRESOURCEA(IDB_TOOLBAR), IMAGE_BITMAP, 0, 0, 0);
+    HBITMAP hStrip = Sm6337_LoadToolbarStrip();
     if (hStrip) {
         himl = ImageList_Create(16, 16, ILC_COLOR24 | ILC_MASK, 20, 4);
         ImageList_AddMasked(himl, hStrip, RGB(192, 192, 192));
