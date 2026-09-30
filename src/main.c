@@ -914,6 +914,41 @@ static void CheckPitchApplied(HWND hWnd, const char *want)
     }
 }
 
+/* Формат нового текста, как в WordPad: после того как выделение снято и курсор стоит на месте,
+   печатаемое берёт шрифт и размер СИМВОЛА СЛЕВА от курсора. Жирный/подчёркнутый и т.п. RichEdit
+   так и делает сам, а вот шрифт/размер, выставленные на выделении, «залипали» на вставке, из-за
+   чего «расширенный» (это шрифт) оставался включённым там, где символ слева обычный. Вызывается
+   при смене выделения, когда оно пустое (курсор). */
+static BOOL g_inSelSync = FALSE;
+
+static void SyncInsertionFontToLeftChar(LONG pos)
+{
+    if (g_inSelSync || !g_hEdit || pos <= 0) return;
+    g_inSelSync = TRUE;
+    SendMessageA(g_hEdit, WM_SETREDRAW, FALSE, 0);
+    {
+        CHARRANGE keep = { pos, pos }, left = { pos - 1, pos };
+        CHARFORMAT2A prev; ZeroMemory(&prev, sizeof(prev)); prev.cbSize = sizeof(prev);
+        SendMessageA(g_hEdit, EM_EXSETSEL, 0, (LPARAM)&left);
+        SendMessageA(g_hEdit, EM_GETCHARFORMAT, SCF_SELECTION, (LPARAM)&prev);
+        SendMessageA(g_hEdit, EM_EXSETSEL, 0, (LPARAM)&keep);
+        if ((prev.dwMask & CFM_FACE) && (prev.dwMask & CFM_SIZE)) {
+            CHARFORMAT2A cur; ZeroMemory(&cur, sizeof(cur)); cur.cbSize = sizeof(cur);
+            SendMessageA(g_hEdit, EM_GETCHARFORMAT, SCF_SELECTION, (LPARAM)&cur);
+            if (!(cur.dwMask & CFM_FACE) || !(cur.dwMask & CFM_SIZE) ||
+                strcmp(cur.szFaceName, prev.szFaceName) != 0 || cur.yHeight != prev.yHeight) {
+                CHARFORMAT2A set; ZeroMemory(&set, sizeof(set)); set.cbSize = sizeof(set);
+                set.dwMask = CFM_FACE | CFM_SIZE;
+                strcpy(set.szFaceName, prev.szFaceName);
+                set.yHeight = prev.yHeight;
+                SendMessageA(g_hEdit, EM_SETCHARFORMAT, SCF_SELECTION, (LPARAM)&set);
+            }
+        }
+    }
+    SendMessageA(g_hEdit, WM_SETREDRAW, TRUE, 0);
+    g_inSelSync = FALSE;
+}
+
 static const char *ToolbarTip(UINT id)
 {
     switch (id) {
@@ -1083,6 +1118,11 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
     }
     case WM_NOTIFY: {
         NMHDR *nh = (NMHDR *)lParam;
+        if (nh->hwndFrom == g_hEdit && nh->code == EN_SELCHANGE) {
+            SELCHANGE *sc = (SELCHANGE *)lParam;
+            if (sc->chrg.cpMin == sc->chrg.cpMax) SyncInsertionFontToLeftChar(sc->chrg.cpMin);
+            return 0;
+        }
         if (nh->code == TTN_GETDISPINFOA) {
             NMTTDISPINFOA *di = (NMTTDISPINFOA *)lParam;
             const char *t = ToolbarTip((UINT)nh->idFrom);
