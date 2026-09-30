@@ -3,7 +3,7 @@ export PATH := $(TOOLCHAIN):$(PATH)
 CC := $(TOOLCHAIN)/gcc.exe
 
 CFLAGS := -D_WIN32_WINNT=0x0400 -DWINVER=0x0400 -mwindows -O2 -Wall -finput-charset=UTF-8 -fexec-charset=CP1251
-LIBS := -lcomctl32 -lcomdlg32 -lgdi32
+LIBS := -lcomctl32 -lcomdlg32 -lgdi32 -lshell32
 
 SRC := src/main.c src/printer.c src/preview.c
 OUT := build/sm6337edit.exe

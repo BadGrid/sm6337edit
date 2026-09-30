@@ -25,7 +25,7 @@ jobs:
             -finput-charset=UTF-8 -fexec-charset=CP1251 \
             src/main.c src/printer.c src/preview.c \
             -o build/sm6337edit.exe \
-            -lcomctl32 -lcomdlg32 -lgdi32
+            -lcomctl32 -lcomdlg32 -lgdi32 -lshell32
           cp redist/riched20.dll redist/riched32.dll build/
           cp redist/icons/toolbar.bmp build/
           cp help/sm6337edit.cnt build/

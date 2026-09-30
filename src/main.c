@@ -8,6 +8,7 @@
 #include <windows.h>
 #include <commctrl.h>
 #include <commdlg.h>
+#include <shellapi.h>
 #include <richedit.h>
 #include <string.h>
 #include <stdlib.h>
@@ -659,7 +660,9 @@ static unsigned char *BuildPrintJob(const Sm6337Settings *settings, int *outLine
     if (!text) { *outLen = 0; return NULL; }
     GetWindowTextA(g_hEdit, text, len + 1);
 
-    unsigned char *buf = (unsigned char *)HeapAlloc(GetProcessHeap(), 0, (size_t)len * 16 + 128);
+    /* на знак в худшем случае: смена всех атрибутов (до ~19 байт) + перенос + сам знак; табуляция —
+       те же 19 байт один раз и ещё до 7 пробелов с возможным переносом (по 3 байта) — меньше 40 */
+    unsigned char *buf = (unsigned char *)HeapAlloc(GetProcessHeap(), 0, (size_t)len * 40 + 512);
     if (!buf) { HeapFree(GetProcessHeap(), 0, text); *outLen = 0; return NULL; }
 
     CHARRANGE savedSel; SendMessageA(g_hEdit, EM_EXGETSEL, 0, (LPARAM)&savedSel);
@@ -672,7 +675,7 @@ static unsigned char *BuildPrintJob(const Sm6337Settings *settings, int *outLine
     if (settings->leftMargin > 0) { buf[n++] = 0x1B; buf[n++] = 'l'; buf[n++] = (unsigned char)settings->leftMargin; } /* левое поле */
     if (settings->pageMode == SM_PAGEMODE_PRINTER) {
         buf[n++] = 0x1B; buf[n++] = 'Q'; buf[n++] = (unsigned char)settings->cols;  /* правая граница строки */
-        buf[n++] = 0x1B; buf[n++] = 'C'; buf[n++] = (unsigned char)settings->lines; /* длина формата в строках */
+        buf[n++] = 0x1B; buf[n++] = 'C'; buf[n++] = (unsigned char)(settings->lines > 127 ? 127 : settings->lines); /* длина формата в строках (по справочнику 1..127) */
     }
 
     BOOL bold = FALSE, underline = FALSE, elite = FALSE, condensed = FALSE;
@@ -689,13 +692,24 @@ static unsigned char *BuildPrintJob(const Sm6337Settings *settings, int *outLine
 
     for (int i = 0; i < len; i++) {
         unsigned char raw = (unsigned char)text[i];
-        if (raw == '\r') continue;
+        if (raw == '\r') {
+            if (i + 1 < len && text[i + 1] == '\n') continue; /* CR LF — конец строки разберём на LF */
+            raw = '\n';                                        /* одиночный CR (RichEdit 3.0+) — тоже конец строки */
+        }
 
         if (raw == '\n') {
             buf[n++] = 0x0D; buf[n++] = 0x0A;
             colF = startCol; lineCount++;
             continue;
         }
+
+        /* Управляющие коды из документа в принтер не пускаем: ESC, SI и прочие из вставленного текста
+           превратились бы в команды принтеру. Табуляция — до ближайшей кратной 8 колонки пробелами (принтер
+           сам сдвигал бы головку по своим табостопам, и перенос и предпросмотр считали бы неверно). */
+        int repeat = 1;
+        if (raw == '\t') { repeat = 8 - ((int)(colF + 0.001) % 8); raw = ' '; }
+        else if (raw < 32 || raw == 127) continue;
+        else if (raw == 0xA0) raw = ' '; /* неразрывный пробел */
 
         CHARRANGE cr; cr.cpMin = i; cr.cpMax = i + 1;
         SendMessageA(g_hEdit, EM_EXSETSEL, 0, (LPARAM)&cr);
@@ -708,6 +722,7 @@ static unsigned char *BuildPrintJob(const Sm6337Settings *settings, int *outLine
         BOOL wantElite, wantCondensed, wantExpanded;
         double cpi = PitchCpiFromFormat(cf.szFaceName, cf.yHeight, &wantElite, &wantCondensed, &wantExpanded);
 
+        for (int rep = 0; rep < repeat; rep++) {
         if (software && colF + 10.0 / cpi > (double)settings->cols + 0.001) { /* знак целиком должен влезать (расширенный — 2 колонки) */
             buf[n++] = 0x0D; buf[n++] = 0x0A;
             colF = startCol; lineCount++;
@@ -747,6 +762,7 @@ static unsigned char *BuildPrintJob(const Sm6337Settings *settings, int *outLine
         Sm6337_EncodeChar(raw, settings->codeTable, &b);
         buf[n++] = b;
         colF += 10.0 / cpi; /* вес символа в "пика-эквиваленте" — g_cols откалиброван для 10cpi */
+        } /* rep: табуляция печатается несколькими пробелами */
     }
 
     if (bold) { buf[n++] = 0x1B; buf[n++] = 'F'; }             /* вернуть шрифт в обычное состояние */
@@ -1041,6 +1057,128 @@ static void CheckPitchApplied(HWND hWnd, const char *want)
     }
 }
 
+/* ---- Документ: заголовок окна, вопрос о несохранённом, открытие и сохранение ---- */
+
+static BOOL IsTextPath(const char *path)
+{
+    size_t l = strlen(path);
+    return l >= 4 && _stricmp(path + l - 4, ".txt") == 0;
+}
+
+/* «Имя файла [*] — SM6337 Edit»; «*» — есть несохранённые изменения. */
+static void SetDocTitle(HWND hWnd)
+{
+    static char last[MAX_PATH + 64] = "";
+    char t[MAX_PATH + 64];
+    const char *name = "Без имени";
+    if (g_curFile[0]) { const char *sl = strrchr(g_curFile, '\\'); name = sl ? sl + 1 : g_curFile; }
+    strcpy(t, name);
+    if (g_hEdit && SendMessageA(g_hEdit, EM_GETMODIFY, 0, 0)) strcat(t, " *");
+    strcat(t, " — SM6337 Edit");
+    if (strcmp(t, last) != 0) { strcpy(last, t); SetWindowTextA(hWnd, t); }
+}
+
+static BOOL SaveDocument(HWND hWnd, BOOL saveAs);
+
+/* Спросить про несохранённые изменения. TRUE — можно продолжать (сохранили или отказались от
+   сохранения), FALSE — пользователь передумал (Отмена или сохранение не удалось). */
+static BOOL AskSaveChanges(HWND hWnd)
+{
+    int r;
+    if (!g_hEdit || !SendMessageA(g_hEdit, EM_GETMODIFY, 0, 0)) return TRUE;
+    r = MessageBoxA(hWnd, "Сохранить изменения в документе?", "SM6337 Edit", MB_YESNOCANCEL | MB_ICONQUESTION);
+    if (r == IDCANCEL) return FALSE;
+    if (r == IDNO) return TRUE;
+    return SaveDocument(hWnd, FALSE);
+}
+
+/* Открыть файл: RTF (по заголовку «{\rtf») или обычный текст. */
+static BOOL OpenDocumentPath(HWND hWnd, const char *path)
+{
+    HANDLE hFile = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    char head[8];
+    DWORD got = 0;
+    BOOL rtf;
+    EDITSTREAM es;
+    if (hFile == INVALID_HANDLE_VALUE) {
+        MessageBoxA(hWnd, "Не удалось открыть файл.", "Ошибка", MB_OK | MB_ICONERROR);
+        return FALSE;
+    }
+    ReadFile(hFile, head, 5, &got, NULL);
+    SetFilePointer(hFile, 0, NULL, FILE_BEGIN);
+    rtf = (got >= 5 && memcmp(head, "{\\rtf", 5) == 0);
+    ZeroMemory(&es, sizeof(es));
+    es.dwCookie = (DWORD_PTR)hFile;
+    es.pfnCallback = StreamInFromFile;
+    SendMessageA(g_hEdit, EM_STREAMIN, rtf ? SF_RTF : SF_TEXT, (LPARAM)&es);
+    CloseHandle(hFile);
+    if (es.dwError) {
+        MessageBoxA(hWnd, "Не удалось прочитать файл.", "Ошибка", MB_OK | MB_ICONERROR);
+        return FALSE;
+    }
+    strcpy(g_curFile, path);
+    SendMessageA(g_hEdit, EM_SETMODIFY, FALSE, 0);
+    SendMessageA(g_hEdit, EM_EMPTYUNDOBUFFER, 0, 0);
+    SetDocTitle(hWnd);
+    return TRUE;
+}
+
+/* Сохранить (saveAs — всегда спросить имя). Формат по расширению: .txt — обычный текст, иначе RTF.
+   Пишем во временный файл и только потом подменяем им старый: если запись оборвётся, прежний
+   файл не потеряется. */
+static BOOL SaveDocument(HWND hWnd, BOOL saveAs)
+{
+    char path[MAX_PATH], tmp[MAX_PATH + 8];
+    HANDLE hFile;
+    EDITSTREAM es;
+    if (saveAs || g_curFile[0] == 0) {
+        OPENFILENAMEA ofn;
+        path[0] = 0;
+        ZeroMemory(&ofn, sizeof(ofn));
+        ofn.lStructSize = OPENFILENAME_SIZE_VERSION_400A;
+        ofn.hwndOwner = hWnd;
+        ofn.lpstrFilter = "Документы RTF (*.rtf)\0*.rtf\0Обычный текст (*.txt)\0*.txt\0Все файлы (*.*)\0*.*\0";
+        ofn.lpstrFile = path;
+        ofn.nMaxFile = MAX_PATH;
+        ofn.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST;
+        if (!GetSaveFileNameA(&ofn)) return FALSE;
+        {   /* нет расширения — дописать по выбранному фильтру */
+            const char *sl = strrchr(path, '\\');
+            if (!strchr(sl ? sl : path, '.') && strlen(path) + 5 < MAX_PATH)
+                strcat(path, ofn.nFilterIndex == 2 ? ".txt" : ".rtf");
+        }
+    } else {
+        strcpy(path, g_curFile);
+    }
+    strcpy(tmp, path);
+    strcat(tmp, ".tmp");
+
+    hFile = CreateFileA(tmp, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hFile == INVALID_HANDLE_VALUE) {
+        MessageBoxA(hWnd, "Не удалось сохранить файл (нет доступа к папке?).", "Ошибка", MB_OK | MB_ICONERROR);
+        return FALSE;
+    }
+    ZeroMemory(&es, sizeof(es));
+    es.dwCookie = (DWORD_PTR)hFile;
+    es.pfnCallback = StreamOutToFile;
+    SendMessageA(g_hEdit, EM_STREAMOUT, IsTextPath(path) ? SF_TEXT : SF_RTF, (LPARAM)&es);
+    CloseHandle(hFile);
+    if (es.dwError) {
+        DeleteFileA(tmp);
+        MessageBoxA(hWnd, "Ошибка записи файла. Прежний файл не изменён.", "Ошибка", MB_OK | MB_ICONERROR);
+        return FALSE;
+    }
+    DeleteFileA(path);   /* на Win9x MoveFile не заменяет существующий файл */
+    if (!MoveFileA(tmp, path)) {
+        MessageBoxA(hWnd, "Не удалось заменить файл. Новая копия сохранена рядом с расширением .tmp.", "Ошибка", MB_OK | MB_ICONERROR);
+        return FALSE;
+    }
+    strcpy(g_curFile, path);
+    SendMessageA(g_hEdit, EM_SETMODIFY, FALSE, 0);
+    SetDocTitle(hWnd);
+    return TRUE;
+}
+
 static const char *ToolbarTip(UINT id)
 {
     switch (id) {
@@ -1188,11 +1326,23 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
         SetFocus(g_hEdit);
         UpdateToolbarState();
         SetTimer(hWnd, TB_TIMER_ID, 200, NULL);
+        DragAcceptFiles(hWnd, TRUE);   /* перетащить файл на окно — открыть */
         return 0;
     }
     case WM_TIMER:
-        if (wParam == TB_TIMER_ID) UpdateToolbarState();
+        if (wParam == TB_TIMER_ID) { UpdateToolbarState(); SetDocTitle(hWnd); }
         return 0;
+    case WM_CLOSE:
+        if (!AskSaveChanges(hWnd)) return 0;   /* Отмена — не закрываем */
+        DestroyWindow(hWnd);
+        return 0;
+    case WM_DROPFILES: {
+        char path[MAX_PATH] = "";
+        if (DragQueryFileA((HDROP)wParam, 0, path, MAX_PATH) && AskSaveChanges(hWnd))
+            OpenDocumentPath(hWnd, path);
+        DragFinish((HDROP)wParam);
+        return 0;
+    }
     case WM_APP + 7:
         /* курсор сдвинули (не набором текста): вернуть режим набора в точку вставки */
         if (g_changeSeq != g_syncSeq) g_syncSeq = g_changeSeq; /* сдвиг вызван набором — пропускаем */
@@ -1245,71 +1395,36 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
         if (TypingFormatCommand(LOWORD(wParam))) return 0; /* нет выделения — меняем режим набора */
         switch (LOWORD(wParam)) {
         case IDM_FILE_EXIT:
-            DestroyWindow(hWnd);
+            SendMessageA(hWnd, WM_CLOSE, 0, 0);
             return 0;
         case IDM_FILE_NEW:
+            if (!AskSaveChanges(hWnd)) return 0;
             SetWindowTextA(g_hEdit, "");
             g_curFile[0] = 0;
+            SendMessageA(g_hEdit, EM_SETMODIFY, FALSE, 0);
+            SendMessageA(g_hEdit, EM_EMPTYUNDOBUFFER, 0, 0);
+            SetDocTitle(hWnd);
             return 0;
         case IDM_FILE_OPEN: {
             char path[MAX_PATH] = "";
             OPENFILENAMEA ofn; ZeroMemory(&ofn, sizeof(ofn));
+            if (!AskSaveChanges(hWnd)) return 0;
             ofn.lStructSize = OPENFILENAME_SIZE_VERSION_400A;
             ofn.hwndOwner = hWnd;
-            ofn.lpstrFilter = "Документы RTF (*.rtf)\0*.rtf\0Все файлы (*.*)\0*.*\0";
+            ofn.lpstrFilter = "Документы RTF и текст (*.rtf;*.txt)\0*.rtf;*.txt\0Все файлы (*.*)\0*.*\0";
             ofn.lpstrFile = path;
             ofn.nMaxFile = MAX_PATH;
             ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
             if (!GetOpenFileNameA(&ofn)) return 0;
-
-            HANDLE hFile = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL,
-                OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-            if (hFile == INVALID_HANDLE_VALUE) {
-                MessageBoxA(hWnd, "Не удалось открыть файл.", "Ошибка", MB_OK | MB_ICONERROR);
-                return 0;
-            }
-            EDITSTREAM es; ZeroMemory(&es, sizeof(es));
-            es.dwCookie = (DWORD_PTR)hFile;
-            es.pfnCallback = StreamInFromFile;
-            SendMessageA(g_hEdit, EM_STREAMIN, SF_RTF, (LPARAM)&es);
-            CloseHandle(hFile);
-            if (es.dwError) {
-                MessageBoxA(hWnd, "Файл повреждён или это не RTF.", "Ошибка", MB_OK | MB_ICONERROR);
-                return 0;
-            }
-            strcpy(g_curFile, path);
+            OpenDocumentPath(hWnd, path);
             return 0;
         }
         case IDM_FILE_SAVE:
-        case IDM_FILE_SAVEAS: {
-            if (LOWORD(wParam) == IDM_FILE_SAVEAS || g_curFile[0] == 0) {
-                char path[MAX_PATH] = "";
-                OPENFILENAMEA ofn; ZeroMemory(&ofn, sizeof(ofn));
-                ofn.lStructSize = OPENFILENAME_SIZE_VERSION_400A;
-                ofn.hwndOwner = hWnd;
-                ofn.lpstrFilter = "Документы RTF (*.rtf)\0*.rtf\0Все файлы (*.*)\0*.*\0";
-                ofn.lpstrFile = path;
-                ofn.nMaxFile = MAX_PATH;
-                ofn.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST;
-                ofn.lpstrDefExt = "rtf";
-                if (!GetSaveFileNameA(&ofn)) return 0;
-                strcpy(g_curFile, path);
-            }
-
-            HANDLE hFile = CreateFileA(g_curFile, GENERIC_WRITE, 0, NULL,
-                CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-            if (hFile != INVALID_HANDLE_VALUE) {
-                EDITSTREAM es; ZeroMemory(&es, sizeof(es));
-                es.dwCookie = (DWORD_PTR)hFile;
-                es.pfnCallback = StreamOutToFile;
-                SendMessageA(g_hEdit, EM_STREAMOUT, SF_RTF, (LPARAM)&es);
-                CloseHandle(hFile);
-                if (es.dwError) MessageBoxA(hWnd, "Ошибка записи файла.", "Ошибка", MB_OK | MB_ICONERROR);
-            } else {
-                MessageBoxA(hWnd, "Не удалось сохранить файл.", "Ошибка", MB_OK | MB_ICONERROR);
-            }
+            SaveDocument(hWnd, FALSE);
             return 0;
-        }
+        case IDM_FILE_SAVEAS:
+            SaveDocument(hWnd, TRUE);
+            return 0;
         case IDM_EDIT_UNDO:
             SendMessageA(g_hEdit, WM_UNDO, 0, 0);
             return 0;
@@ -1631,7 +1746,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow)
 {
-    (void)hPrevInstance; (void)lpCmdLine;
+    (void)hPrevInstance;
 
     char exePathA[MAX_PATH] = "";
     char dllPath20[MAX_PATH] = "", dllPath32[MAX_PATH] = "";
@@ -1696,6 +1811,18 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
     ShowWindow(hWnd, nCmdShow);
     UpdateWindow(hWnd);
+
+    /* Файл из командной строки (двойной клик по .rtf/.txt, «Открыть с помощью», перетаскивание на exe) */
+    if (lpCmdLine && lpCmdLine[0]) {
+        char path[MAX_PATH];
+        const char *s = lpCmdLine;
+        size_t k = 0;
+        while (*s == ' ') s++;
+        if (*s == '"') s++;
+        while (*s && *s != '"' && k < MAX_PATH - 1) path[k++] = *s++;
+        path[k] = 0;
+        if (k > 0) OpenDocumentPath(hWnd, path);
+    }
 
     static ACCEL accels[] = {
         { FCONTROL | FVIRTKEY, 'F', IDM_EDIT_FIND },

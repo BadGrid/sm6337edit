@@ -38,6 +38,7 @@ text comes out crisp, as if printed from the printer's own ROM font.
   an out-of-paper fault (АВР), so by default a number of empty lines is sent instead
 - Unidirectional printing (ESC U) — more precise, but slower
 - Open/save `.rtf` (RichEdit serializes the formatting itself)
+  and plain `.txt`; the program asks about unsaved changes before closing, creating a new document or opening another file (an asterisk in the window title marks them), a file can be dropped onto the window or opened from the command line; saving goes through a temporary file, so the previous one survives a failure
 - All settings live in `C:\edit\sm6337.ini` and survive restarts
 - Print preview (File → Print Preview, the sheet-and-magnifier button): shows the pages exactly as
   the printer will produce them — built from the same ESC/P stream that goes to LPT1

@@ -7,6 +7,19 @@
 static unsigned short Cp1251ToUnicode(unsigned char b)
 {
     if (b < 0x80) return b;
+    /* Типографские знаки, которых нет в таблицах принтера (см. ниже), заменяем близкими
+       ASCII-знаками, а не «?»: кавычки-ёлочки, длинное и среднее тире, «№», многоточие, маркер. */
+    switch (b) {
+    case 0x91: case 0x92: return '\'';            /* ‘ ’ */
+    case 0x93: case 0x94: case 0xAB: case 0xBB: return '"'; /* “ ” « » */
+    case 0x96: case 0x97: return '-';             /* – — */
+    case 0x85: return '.';                        /* … */
+    case 0x95: return '*';                        /* • */
+    case 0xA0: return ' ';                        /* неразрывный пробел */
+    case 0xB9: return '#';                        /* № */
+    case 0xA9: return 'c';                        /* © */
+    case 0xAE: return 'R';                        /* ® */
+    }
     if (b == 0xA8) return 0x0401; /* Ё */
     if (b == 0xB8) return 0x0451; /* ё */
     if (b >= 0xC0 && b <= 0xDF) return (unsigned short)(0x0410 + (b - 0xC0)); /* А-Я */
