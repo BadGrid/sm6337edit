@@ -787,6 +787,25 @@ static void UpdateToolbarState(void)
     TbCheck(IDM_FORMAT_PITCH10, faceKnown && strcmp(cf.szFaceName, SM_PITCH_FACE_NORMAL) == 0);
 }
 
+/* Пункты меню берут состояние у тулбара: те же условия (серые, галочки),
+   чтобы кнопка и пункт меню не расходились. Вызывается при раскрытии меню. */
+static void SyncMenuWithToolbar(HMENU hm)
+{
+    static const int ids[] = {
+        IDM_EDIT_UNDO, IDM_EDIT_REDO, IDM_EDIT_CUT, IDM_EDIT_COPY, IDM_EDIT_PASTE,
+        IDM_FORMAT_BOLD, IDM_FORMAT_UNDERLINE, IDM_FORMAT_PITCH10, IDM_FORMAT_PITCH12,
+        IDM_FORMAT_PITCH17, IDM_FORMAT_DOUBLESTRIKE, IDM_FORMAT_EXPANDED,
+        IDM_FORMAT_SUPERSCRIPT, IDM_FORMAT_SUBSCRIPT
+    };
+    UpdateToolbarState();
+    for (int i = 0; i < (int)(sizeof(ids) / sizeof(ids[0])); i++) {
+        LRESULT st = SendMessageA(g_hToolbar, TB_GETSTATE, ids[i], 0);
+        if (st == -1) continue;
+        EnableMenuItem(hm, ids[i], MF_BYCOMMAND | ((st & TBSTATE_ENABLED) ? MF_ENABLED : MF_GRAYED));
+        CheckMenuItem(hm, ids[i], MF_BYCOMMAND | ((st & TBSTATE_CHECKED) ? MF_CHECKED : MF_UNCHECKED));
+    }
+}
+
 static const char *ToolbarTip(UINT id)
 {
     switch (id) {
@@ -931,6 +950,9 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
     }
     case WM_TIMER:
         if (wParam == TB_TIMER_ID) UpdateToolbarState();
+        return 0;
+    case WM_INITMENUPOPUP:
+        SyncMenuWithToolbar((HMENU)wParam);
         return 0;
     case WM_SIZE: {
         if (g_hToolbar) SendMessageA(g_hToolbar, WM_SIZE, 0, 0);
