@@ -25,7 +25,8 @@ text comes out crisp, as if printed from the printer's own ROM font.
   printer is monochrome)
 - Things WordPad does not have because they are about the printer itself:
   - double-strike (ESC G/H) and expanded (ESC W) printing
-  - pitch 10/12/17 cpi (Pica / Elite / Pica+Condensed)
+  - pitch 10/12/17 cpi (Pica / Elite / Pica+Condensed) — shown on screen with different widths at the
+    same character height (own fonts from `redist/fonts/`)
   - superscript / subscript (ESC S/T)
   - code page: standard PC table 14 or the additional CP866-compatible table 15 (ESC R)
 - Custom page limits (characters per line, lines per page, left margin, line spacing) — line wrapping
@@ -76,8 +77,9 @@ tab, so you can download a ready folder without a local toolchain.
 - `src/` — sources (`main.c`, `printer.c`/`printer.h` — printing and code pages, `preview.c`/`preview.h` —
   print preview, `resource.h`)
 - `help/` — help sources (RTF, project and contents); how to compile them is in `help/README.md`
-- `redist/` — `riched20.dll` / `riched32.dll` (RichEdit from Win98 SE), `icons/toolbar.bmp` and the
-  compiled help `sm6337edit.hlp`
+- `redist/` — `riched20.dll` / `riched32.dll` (RichEdit from Win98 SE), `icons/toolbar.bmp`, the
+  compiled help `sm6337edit.hlp` and `fonts/` — the pitch 10/12/17 fonts (derived from Noto Sans Mono,
+  OFL license)
 - `printer_commands.md` — reference of ESC/P commands and code tables of the SM6337, compiled by hand
   from the manual (`СМ6337 РЭ.djvu`); in Russian
 - `rom/` — dump of the printer's character generator
