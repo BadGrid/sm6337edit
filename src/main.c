@@ -1037,6 +1037,11 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
 
         SendMessageA(g_hEdit, EM_SETEVENTMASK, 0, ENM_SELCHANGE);
 
+        /* Автоподбор шрифта RichEdit (IMF_AUTOFONT/DUALFONT) при наборе меняет шрифт на «подходящий»
+           для языка клавиатуры: поставили «расширенный» шрифт, набрали букву другой раскладки —
+           и шрифт сбросился на обычный. Шаг печати и ширина знака — наши, чужой автоподбор отключаем. */
+        SendMessageA(g_hEdit, EM_SETLANGOPTIONS, 0, 0);
+
         g_hFont = CreateFontA(
             -14, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
             RUSSIAN_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
