@@ -36,6 +36,7 @@
 #define IDM_VIEW_STATUSBAR  402
 
 #define IDM_HELP_ABOUT      501
+#define IDM_HELP_CONTENTS   502
 
 #define IDM_JOKE_CRASH      901
 

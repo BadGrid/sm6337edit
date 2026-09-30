@@ -17,6 +17,8 @@ $(OUT): $(SRC) src/resource.h src/printer.h src/preview.h | build
 	$(CC) $(CFLAGS) $(SRC) -o $(OUT) $(LIBS)
 	cp redist/riched20.dll redist/riched32.dll build/
 	cp redist/icons/toolbar.bmp build/
+	cp help/sm6337edit.cnt build/
+	-cp redist/sm6337edit.hlp build/
 
 clean:
 	rm -rf build

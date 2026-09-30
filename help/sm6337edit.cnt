@@ -1,0 +1,15 @@
+:Base sm6337edit.hlp
+:Title SM6337 Edit
+1 Введение=IDH_INTRO
+1 Файлы и документы=IDH_FILES
+1 Правка и поиск=IDH_EDIT
+1 Форматирование текста=IDH_FORMAT
+1 Шаг печати 10, 12 и 17=IDH_PITCH
+1 Двойная и расширенная печать, индексы=IDH_EFFECTS
+1 Предпросмотр печати=IDH_PREVIEW
+1 Печать=IDH_PRINT
+1 Настройка СМ6337=IDH_SETUP
+1 Кодовые таблицы 14 и 15=IDH_CODETABLE
+1 Сочетания клавиш=IDH_KEYS
+1 Если что-то не работает=IDH_TROUBLE
+1 О программе=IDH_ABOUT

@@ -31,6 +31,7 @@ static int g_lineSpacing = 0; /* ESC A n, шаг 0.353мм; 0 = стандарт
 static int g_leftMargin = 0;  /* ESC l n, левое поле в символах; 0 = без поля */
 static HWND g_hToolbar;
 static char g_iniPath[MAX_PATH] = "";
+static char g_helpPath[MAX_PATH] = ""; /* sm6337edit.hlp рядом с exe */
 static char g_curFile[MAX_PATH] = "";
 
 static BOOL g_dlgDone;
@@ -526,6 +527,7 @@ static HMENU BuildMenu(void)
     AppendMenuA(hMenu, MF_POPUP, (UINT_PTR)hView, "&Вид");
 
     HMENU hHelp = CreatePopupMenu();
+    AppendMenuA(hHelp, MF_STRING, IDM_HELP_CONTENTS, "&Содержание\tF1");
     AppendMenuA(hHelp, MF_STRING, IDM_HELP_ABOUT, "О &программе...");
     AppendMenuA(hMenu, MF_POPUP, (UINT_PTR)hHelp, "&Справка");
 
@@ -1190,6 +1192,14 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
             SendMessageA(g_hEdit, EM_SETCHARFORMAT, SCF_SELECTION, (LPARAM)&cf);
             return 0;
         }
+        case IDM_HELP_CONTENTS:
+            if (GetFileAttributesA(g_helpPath) == 0xFFFFFFFF) {
+                MessageBoxA(hWnd, "Файл справки sm6337edit.hlp не найден рядом с программой.",
+                    "Справка", MB_OK | MB_ICONINFORMATION);
+            } else if (!WinHelpA(hWnd, g_helpPath, HELP_FINDER, 0)) {
+                MessageBoxA(hWnd, "Не удалось открыть справку (WinHelp).", "Справка", MB_OK | MB_ICONERROR);
+            }
+            return 0;
         case IDM_HELP_ABOUT:
             MessageBoxA(hWnd, "SM6337 Edit\nРедактор для Windows 98 SE с прямой печатью на принтер СМ6337 (без драйвера, через LPT1).",
                 "О программе", MB_OK | MB_ICONINFORMATION);
@@ -1329,6 +1339,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
     }
     case WM_DESTROY:
         KillTimer(hWnd, TB_TIMER_ID);
+        if (g_helpPath[0]) WinHelpA(hWnd, g_helpPath, HELP_QUIT, 0);
         if (g_hFont) DeleteObject(g_hFont);
         PostQuitMessage(0);
         return 0;
@@ -1349,6 +1360,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
             char *slashA = strrchr(exePathA, '\\');
             if (slashA) *(slashA + 1) = 0;
         }
+
+        strcpy(g_helpPath, exePathA); strcat(g_helpPath, "sm6337edit.hlp");
 
         CreateDirectoryA("C:\\edit", NULL); /* игнорируем ошибку — важно только чтобы папка была */
         strcpy(g_iniPath, "C:\\edit\\sm6337.ini");
@@ -1405,6 +1418,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         { FCONTROL | FVIRTKEY, 'F', IDM_EDIT_FIND },
         { FVIRTKEY, VK_F3, IDM_EDIT_FINDNEXT },
         { FCONTROL | FVIRTKEY, 'Y', IDM_EDIT_REDO },
+        { FCONTROL | FVIRTKEY, 'N', IDM_FILE_NEW },
+        { FCONTROL | FVIRTKEY, 'O', IDM_FILE_OPEN },
+        { FCONTROL | FVIRTKEY, 'S', IDM_FILE_SAVE },
+        { FCONTROL | FVIRTKEY, 'P', IDM_FILE_PRINT },
+        { FVIRTKEY, VK_F1, IDM_HELP_CONTENTS },
     };
     HACCEL hAccel = CreateAcceleratorTableA(accels, sizeof(accels) / sizeof(accels[0]));
 

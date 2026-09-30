@@ -34,6 +34,8 @@ jobs:
             -lcomctl32 -lcomdlg32 -lgdi32
           cp redist/riched20.dll redist/riched32.dll build/
           cp redist/icons/toolbar.bmp build/
+          cp help/sm6337edit.cnt build/
+          cp redist/sm6337edit.hlp build/ || true
 
       - name: Упаковать
         run: |
