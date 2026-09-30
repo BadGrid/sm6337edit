@@ -33,6 +33,7 @@ static int g_leftMargin = 0;  /* ESC l n, левое поле в символа�
 /* Альбомная ориентация: бумага боком. g_cols/g_lines хранят размеры ТЕКУЩЕЙ ориентации; при переключении
    в окне настройки они пересчитываются пропорционально сторонам A4 (297 x 210 мм). */
 static BOOL g_landscape = FALSE;
+static BOOL g_printFileName = FALSE; /* печатать имя файла по центру первой строки листа */
 static HWND g_hToolbar;
 static char g_iniPath[MAX_PATH] = "";
 static char g_helpPath[MAX_PATH] = ""; /* sm6337edit.hlp рядом с exe */
@@ -61,6 +62,7 @@ static void LoadSettings(void)
     g_leftMargin = (int)GetPrivateProfileIntA("Settings", "LeftMargin", 0, g_iniPath);
     if (g_leftMargin < 0 || g_leftMargin > 255) g_leftMargin = 0;
     g_landscape = GetPrivateProfileIntA("Settings", "Landscape", 0, g_iniPath) ? TRUE : FALSE;
+    g_printFileName = GetPrivateProfileIntA("Settings", "PrintFileName", 0, g_iniPath) ? TRUE : FALSE;
 }
 
 /* Пересчёт размера страницы при смене ориентации: ширина и высота A4 — 297 и 210 мм, так что в
@@ -90,6 +92,7 @@ static void SaveSettings(void)
     UIntToStrA((unsigned long)g_lineSpacing, v); WritePrivateProfileStringA("Settings", "LineSpacing", v, g_iniPath);
     UIntToStrA((unsigned long)g_leftMargin, v); WritePrivateProfileStringA("Settings", "LeftMargin", v, g_iniPath);
     UIntToStrA((unsigned long)(g_landscape ? 1 : 0), v); WritePrivateProfileStringA("Settings", "Landscape", v, g_iniPath);
+    UIntToStrA((unsigned long)(g_printFileName ? 1 : 0), v); WritePrivateProfileStringA("Settings", "PrintFileName", v, g_iniPath);
 }
 
 /* n * 0.353мм, без float/sprintf — целыми, в сотых мм. */
@@ -157,6 +160,7 @@ static LRESULT CALLBACK SettingsDlgProc(HWND hDlg, UINT msg, WPARAM wParam, LPAR
                 if (translated && v >= 0 && v <= 255) g_leftMargin = v;
             }
             g_unidirectional = (IsDlgButtonChecked(hDlg, IDC_CHK_UNIDIR) == BST_CHECKED);
+            g_printFileName = (IsDlgButtonChecked(hDlg, IDC_CHK_FILENAME) == BST_CHECKED);
             SaveSettings();
             DestroyWindow(hDlg);
             return 0;
@@ -276,13 +280,16 @@ static void ShowSm6337SettingsDialog(HWND owner)
     CreateWindowA("BUTTON", "Однонаправленная печать (медленнее, но без смещения строк)",
         WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX | BS_MULTILINE | WS_TABSTOP,
         10, 416, 545, 36, hDlg, (HMENU)IDC_CHK_UNIDIR, hInst, NULL);
+    CreateWindowA("BUTTON", "Печатать имя файла по центру первой строки листа",
+        WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX | WS_TABSTOP,
+        10, 454, 545, 24, hDlg, (HMENU)IDC_CHK_FILENAME, hInst, NULL);
 
     CreateWindowA("BUTTON", "ОК",
         WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON | WS_TABSTOP,
-        195, 464, 90, 28, hDlg, (HMENU)IDOK, hInst, NULL);
+        195, 488, 90, 28, hDlg, (HMENU)IDOK, hInst, NULL);
     CreateWindowA("BUTTON", "Отмена",
         WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_TABSTOP,
-        295, 464, 90, 28, hDlg, (HMENU)IDCANCEL, hInst, NULL);
+        295, 488, 90, 28, hDlg, (HMENU)IDCANCEL, hInst, NULL);
 
     CheckRadioButton(hDlg, IDC_RADIO_T14, IDC_RADIO_T15,
         (g_codeTable == 14) ? IDC_RADIO_T14 : IDC_RADIO_T15);
@@ -298,6 +305,7 @@ static void ShowSm6337SettingsDialog(HWND owner)
     SetDlgItemInt(hDlg, IDC_EDIT_LINESPACING, (UINT)g_lineSpacing, FALSE);
     { char mm[48]; FormatSpacingMm(g_lineSpacing, mm); SetDlgItemTextA(hDlg, IDC_STATIC_LINESPACING_MM, mm); }
     CheckDlgButton(hDlg, IDC_CHK_UNIDIR, g_unidirectional ? BST_CHECKED : BST_UNCHECKED);
+    CheckDlgButton(hDlg, IDC_CHK_FILENAME, g_printFileName ? BST_CHECKED : BST_UNCHECKED);
 
     EnableWindow(owner, FALSE);
     g_dlgDone = FALSE;
@@ -689,6 +697,25 @@ static unsigned char *BuildPrintJob(const Sm6337Settings *settings, int *outLine
     const double startCol = startColV;
     double colF = startCol; int lineCount = 1;
     BOOL software = (settings->pageMode == SM_PAGEMODE_SOFTWARE);
+    /* Имя файла по центру первой строки листа (параметр в «Настройке печати»), ниже — пустая строка.
+       Центровка по ширине строки за вычетом левого поля, в колонках 10 знаков на дюйм. */
+    if (settings->headerText && settings->headerText[0]) {
+        int avail = settings->cols - (int)startCol;
+        int hl = (int)strlen(settings->headerText);
+        int pad, k;
+        if (avail < 1) avail = 1;
+        if (hl > avail) hl = avail;
+        pad = (avail - hl) / 2;
+        for (k = 0; k < pad; k++) buf[n++] = ' ';
+        for (k = 0; k < hl; k++) {
+            unsigned char hb, hr = (unsigned char)settings->headerText[k];
+            if (hr < 32) hr = ' ';
+            Sm6337_EncodeChar(hr, settings->codeTable, &hb);
+            buf[n++] = hb;
+        }
+        buf[n++] = 0x0D; buf[n++] = 0x0A; buf[n++] = 0x0D; buf[n++] = 0x0A;
+        lineCount += 2;
+    }
 
     for (int i = 0; i < len; i++) {
         unsigned char raw = (unsigned char)text[i];
@@ -1078,6 +1105,14 @@ static void SetDocTitle(HWND hWnd)
     if (strcmp(t, last) != 0) { strcpy(last, t); SetWindowTextA(hWnd, t); }
 }
 
+/* Имя файла без пути для печати на листе; у нового документа — «Без имени». */
+static const char *DocHeaderText(char *buf)
+{
+    const char *name = "Без имени";
+    if (g_curFile[0]) { const char *sl = strrchr(g_curFile, '\\'); name = sl ? sl + 1 : g_curFile; }
+    strcpy(buf, name);
+    return buf;
+}
 static BOOL SaveDocument(HWND hWnd, BOOL saveAs);
 
 /* Спросить про несохранённые изменения. TRUE — можно продолжать (сохранили или отказались от
@@ -1603,6 +1638,8 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
             settings.lineSpacing = g_lineSpacing;
             settings.leftMargin = g_leftMargin;
             settings.landscape = g_landscape;
+            char hdr[MAX_PATH];
+            settings.headerText = g_printFileName ? DocHeaderText(hdr) : NULL;
 
             int lineCount = 0; DWORD jobLen = 0;
             unsigned char *job = BuildPrintJob(&settings, &lineCount, &jobLen);
@@ -1626,6 +1663,8 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
             settings.lineSpacing = g_lineSpacing;
             settings.leftMargin = g_leftMargin;
             settings.landscape = g_landscape;
+            char hdr[MAX_PATH];
+            settings.headerText = g_printFileName ? DocHeaderText(hdr) : NULL;
 
             int lineCount = 0; DWORD jobLen = 0;
             unsigned char *job = BuildPrintJob(&settings, &lineCount, &jobLen);
