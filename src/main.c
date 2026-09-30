@@ -820,6 +820,86 @@ static void TbCheck(int id, BOOL on)
         SendMessageA(g_hToolbar, TB_CHECKBUTTON, id, MAKELONG(on ? TRUE : FALSE, 0));
 }
 
+/* «Режим набора»: формат, который получит НОВЫЙ текст. Кнопки без выделения меняют именно его;
+   он не зависит от того, где стоит курсор и что слева, и сохраняется, пока его не изменят кнопками.
+   Есть выделение — кнопки показывают и меняют формат выделенного, режим набора не трогается; снимаем
+   выделение — снова действует режим набора. */
+static struct { BOOL bold, under, strike, sup, sub; const char *face; long height; }
+    g_typing = { FALSE, FALSE, FALSE, FALSE, FALSE, NULL, 200 };
+static BOOL g_inSelSync = FALSE;
+static unsigned long g_changeSeq = 0; /* растёт при каждой правке текста (EN_CHANGE) */
+static unsigned long g_syncSeq = 0;   /* значение на момент последней обработки смены выделения */
+
+static void TypingToFormat(CHARFORMAT2A *cf)
+{
+    ZeroMemory(cf, sizeof(*cf));
+    cf->cbSize = sizeof(*cf);
+    cf->dwMask = CFM_FACE | CFM_SIZE | CFM_CHARSET | CFM_BOLD | CFM_UNDERLINE | CFM_STRIKEOUT | CFM_SUPERSCRIPT | CFM_SUBSCRIPT;
+    cf->dwEffects = (g_typing.bold ? CFE_BOLD : 0) | (g_typing.under ? CFE_UNDERLINE : 0) |
+                    (g_typing.strike ? CFE_STRIKEOUT : 0) | (g_typing.sup ? CFE_SUPERSCRIPT : 0) |
+                    (g_typing.sub ? CFE_SUBSCRIPT : 0);
+    strcpy(cf->szFaceName, g_typing.face ? g_typing.face : g_faceNormal);
+    cf->yHeight = g_typing.height;
+    cf->bCharSet = RUSSIAN_CHARSET;
+}
+
+/* Привести формат в точке вставки к режиму набора (только если выделения нет). */
+static void ApplyTypingToInsertion(void)
+{
+    CHARRANGE sel;
+    if (!g_hEdit) return;
+    SendMessageA(g_hEdit, EM_EXGETSEL, 0, (LPARAM)&sel);
+    if (sel.cpMin != sel.cpMax) return;
+    {
+        CHARFORMAT2A want, cur;
+        const DWORD fx = CFE_BOLD | CFE_UNDERLINE | CFE_STRIKEOUT | CFE_SUPERSCRIPT | CFE_SUBSCRIPT;
+        TypingToFormat(&want);
+        ZeroMemory(&cur, sizeof(cur)); cur.cbSize = sizeof(cur);
+        SendMessageA(g_hEdit, EM_GETCHARFORMAT, SCF_SELECTION, (LPARAM)&cur);
+        if ((cur.dwMask & CFM_FACE) && (cur.dwMask & CFM_SIZE) && strcmp(cur.szFaceName, want.szFaceName) == 0 &&
+            cur.yHeight == want.yHeight && (cur.dwEffects & fx) == (want.dwEffects & fx) &&
+            (cur.dwMask & (CFM_BOLD | CFM_UNDERLINE | CFM_STRIKEOUT | CFM_SUPERSCRIPT | CFM_SUBSCRIPT)) ==
+                (CFM_BOLD | CFM_UNDERLINE | CFM_STRIKEOUT | CFM_SUPERSCRIPT | CFM_SUBSCRIPT))
+            return; /* уже так */
+        g_inSelSync = TRUE;
+        SendMessageA(g_hEdit, EM_SETCHARFORMAT, SCF_SELECTION, (LPARAM)&want);
+        g_inSelSync = FALSE;
+    }
+}
+
+/* Команда формата при пустом выделении: меняет режим набора. TRUE — команда обработана здесь;
+   FALSE — есть выделение (или это не команда формата), обрабатывает обычный код. */
+static BOOL TypingFormatCommand(UINT cmd)
+{
+    CHARRANGE sel;
+    if (cmd < IDM_FORMAT_BOLD || cmd > IDM_FORMAT_SUBSCRIPT || cmd == IDM_FORMAT_FONT || !g_hEdit) return FALSE;
+    SendMessageA(g_hEdit, EM_EXGETSEL, 0, (LPARAM)&sel);
+    if (sel.cpMin != sel.cpMax) return FALSE;
+    switch (cmd) {
+    case IDM_FORMAT_BOLD: g_typing.bold = !g_typing.bold; break;
+    case IDM_FORMAT_UNDERLINE: g_typing.under = !g_typing.under; break;
+    case IDM_FORMAT_DOUBLESTRIKE: g_typing.strike = !g_typing.strike; break;
+    case IDM_FORMAT_SUPERSCRIPT: g_typing.sup = !g_typing.sup; if (g_typing.sup) g_typing.sub = FALSE; break;
+    case IDM_FORMAT_SUBSCRIPT: g_typing.sub = !g_typing.sub; if (g_typing.sub) g_typing.sup = FALSE; break;
+    case IDM_FORMAT_PITCH10: g_typing.face = g_faceNormal; g_typing.height = 200; break;
+    case IDM_FORMAT_PITCH12: g_typing.face = g_faceElite; g_typing.height = 200; break;
+    case IDM_FORMAT_PITCH17: g_typing.face = g_faceCond; g_typing.height = 200; break;
+    case IDM_FORMAT_EXPANDED:
+        if (g_faceWide[0]) {
+            const char *f = g_typing.face ? g_typing.face : g_faceNormal;
+            g_typing.face = (strcmp(f, g_faceWide) == 0) ? g_faceNormal : g_faceWide;
+            g_typing.height = 200;
+        } else {
+            g_typing.face = g_faceNormal;
+            g_typing.height = (g_typing.height >= 260) ? 200 : 280;
+        }
+        break;
+    default: return FALSE;
+    }
+    ApplyTypingToInsertion();
+    return TRUE;
+}
+
 static void UpdateToolbarState(void)
 {
     if (!g_hToolbar || !g_hEdit) return;
@@ -831,9 +911,14 @@ static void UpdateToolbarState(void)
     TbEnable(IDM_EDIT_COPY, hasSel);
     TbEnable(IDM_EDIT_PASTE, SendMessageA(g_hEdit, EM_CANPASTE, 0, 0) != 0);
 
-    CHARFORMAT2A cf; ZeroMemory(&cf, sizeof(cf));
-    cf.cbSize = sizeof(cf);
-    SendMessageA(g_hEdit, EM_GETCHARFORMAT, SCF_SELECTION, (LPARAM)&cf);
+    CHARFORMAT2A cf;
+    if (hasSel) {
+        ZeroMemory(&cf, sizeof(cf));
+        cf.cbSize = sizeof(cf);
+        SendMessageA(g_hEdit, EM_GETCHARFORMAT, SCF_SELECTION, (LPARAM)&cf);
+    } else {
+        TypingToFormat(&cf); /* нет выделения — кнопки показывают режим набора */
+    }
     /* бит в dwMask сброшен — в выделении смесь, тогда кнопка не «нажата» */
     TbCheck(IDM_FORMAT_BOLD, (cf.dwMask & CFM_BOLD) && (cf.dwEffects & CFE_BOLD));
     TbCheck(IDM_FORMAT_UNDERLINE, (cf.dwMask & CFM_UNDERLINE) && (cf.dwEffects & CFE_UNDERLINE));
@@ -912,43 +997,6 @@ static void CheckPitchApplied(HWND hWnd, const char *want)
         strcat(msg, g_fontsLoaded ? "свои файлы подключены." : "файлы sm6337-10/12/17.ttf не найдены рядом с программой или не подключились, используются системные.");
         MessageBoxA(hWnd, msg, "Шаг печати", MB_OK | MB_ICONINFORMATION);
     }
-}
-
-/* Формат нового текста, как в WordPad: после того как выделение снято и курсор стоит на месте,
-   печатаемое берёт шрифт и размер СИМВОЛА СЛЕВА от курсора. Жирный/подчёркнутый и т.п. RichEdit
-   так и делает сам, а вот шрифт/размер, выставленные на выделении, «залипали» на вставке, из-за
-   чего «расширенный» (это шрифт) оставался включённым там, где символ слева обычный. Вызывается
-   при смене выделения, когда оно пустое (курсор). */
-static BOOL g_inSelSync = FALSE;
-static unsigned long g_changeSeq = 0; /* растёт при каждой правке текста (EN_CHANGE) */
-static unsigned long g_syncSeq = 0;   /* значение на момент последней обработки смены выделения */
-
-static void SyncInsertionFontToLeftChar(LONG pos)
-{
-    if (g_inSelSync || !g_hEdit || pos <= 0) return;
-    CHARRANGE now; SendMessageA(g_hEdit, EM_EXGETSEL, 0, (LPARAM)&now);
-    if (now.cpMin != now.cpMax || now.cpMin != pos) return; /* пока ждали, курсор ушёл или появилось выделение */
-    g_inSelSync = TRUE;
-    {
-        CHARRANGE keep = { pos, pos }, left = { pos - 1, pos };
-        CHARFORMAT2A prev; ZeroMemory(&prev, sizeof(prev)); prev.cbSize = sizeof(prev);
-        SendMessageA(g_hEdit, EM_EXSETSEL, 0, (LPARAM)&left);
-        SendMessageA(g_hEdit, EM_GETCHARFORMAT, SCF_SELECTION, (LPARAM)&prev);
-        SendMessageA(g_hEdit, EM_EXSETSEL, 0, (LPARAM)&keep);
-        if ((prev.dwMask & CFM_FACE) && (prev.dwMask & CFM_SIZE)) {
-            CHARFORMAT2A cur; ZeroMemory(&cur, sizeof(cur)); cur.cbSize = sizeof(cur);
-            SendMessageA(g_hEdit, EM_GETCHARFORMAT, SCF_SELECTION, (LPARAM)&cur);
-            if (!(cur.dwMask & CFM_FACE) || !(cur.dwMask & CFM_SIZE) ||
-                strcmp(cur.szFaceName, prev.szFaceName) != 0 || cur.yHeight != prev.yHeight) {
-                CHARFORMAT2A set; ZeroMemory(&set, sizeof(set)); set.cbSize = sizeof(set);
-                set.dwMask = CFM_FACE | CFM_SIZE;
-                strcpy(set.szFaceName, prev.szFaceName);
-                set.yHeight = prev.yHeight;
-                SendMessageA(g_hEdit, EM_SETCHARFORMAT, SCF_SELECTION, (LPARAM)&set);
-            }
-        }
-    }
-    g_inSelSync = FALSE;
 }
 
 static const char *ToolbarTip(UINT id)
@@ -1104,9 +1152,9 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
         if (wParam == TB_TIMER_ID) UpdateToolbarState();
         return 0;
     case WM_APP + 7:
-        /* курсор сдвинули (не набором текста): привести шрифт вставки к символу слева */
+        /* курсор сдвинули (не набором текста): вернуть режим набора в точку вставки */
         if (g_changeSeq != g_syncSeq) g_syncSeq = g_changeSeq; /* сдвиг вызван набором — пропускаем */
-        else SyncInsertionFontToLeftChar((LONG)wParam);
+        else ApplyTypingToInsertion();
         return 0;
     case WM_INITMENUPOPUP:
         SyncMenuWithToolbar((HMENU)wParam);
@@ -1152,6 +1200,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
         PostMessageA(hWnd, WM_TIMER, TB_TIMER_ID, 0);
         if (LOWORD(wParam) >= IDM_FORMAT_BOLD && LOWORD(wParam) <= IDM_FORMAT_SUBSCRIPT && g_hEdit)
             SetFocus(g_hEdit);
+        if (TypingFormatCommand(LOWORD(wParam))) return 0; /* нет выделения — меняем режим набора */
         switch (LOWORD(wParam)) {
         case IDM_FILE_EXIT:
             DestroyWindow(hWnd);
