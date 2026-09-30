@@ -1,0 +1,51 @@
+name: release
+
+# Запускается вручную: вкладка Actions → release → Run workflow, ввести тег (например v0.1.0).
+# Собирает build/ и выкладывает его zip-архивом в раздел Releases.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Тег релиза (например v0.1.0)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Установить mingw32 (i686, msvcrt)
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q gcc-mingw-w64-i686
+
+      - name: Собрать
+        run: |
+          mkdir -p build
+          i686-w64-mingw32-gcc \
+            -D_WIN32_WINNT=0x0400 -DWINVER=0x0400 -mwindows -O2 -Wall \
+            -finput-charset=UTF-8 -fexec-charset=CP1251 \
+            src/main.c src/printer.c src/preview.c \
+            -o build/sm6337edit.exe \
+            -lcomctl32 -lcomdlg32 -lgdi32
+          cp redist/riched20.dll redist/riched32.dll build/
+          cp redist/icons/toolbar.bmp build/
+
+      - name: Упаковать
+        run: |
+          cd build
+          zip -r "../sm6337edit-${{ github.event.inputs.tag }}.zip" .
+
+      - name: Создать релиз
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.event.inputs.tag }}" \
+            "sm6337edit-${{ github.event.inputs.tag }}.zip" \
+            --title "SM6337 Edit ${{ github.event.inputs.tag }}" \
+            --generate-notes \
+            --target "${{ github.sha }}"

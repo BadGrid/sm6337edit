@@ -1,0 +1,40 @@
+name: Сообщить об ошибке
+description: Что-то работает не так на вашей системе или принтере
+labels: [bug]
+body:
+  - type: dropdown
+    id: os
+    attributes:
+      label: Система
+      options:
+        - Windows 98 SE
+        - Windows 98
+        - Windows 95
+        - Windows Me
+        - Другая (укажите ниже)
+    validations:
+      required: true
+  - type: input
+    id: printer
+    attributes:
+      label: Принтер
+      description: СМ6337 или другой ESC/P-совместимый, порт (LPT1?)
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Версия
+      description: Тег релиза или хеш коммита
+  - type: textarea
+    id: what
+    attributes:
+      label: Что произошло
+      description: Что вы делали, что ожидали, что получили
+    validations:
+      required: true
+  - type: textarea
+    id: extra
+    attributes:
+      label: Дополнительно
+      description: Настройки из C:\edit\sm6337.ini, скриншот предпросмотра, фото распечатки
