@@ -10,6 +10,7 @@
 #include <string.h>
 #include "printer.h"
 #include "preview.h"
+#include "resource.h"
 
 #define PV_PORTRAIT_W  794.0f    /* A4 книжный: 210 мм = 8,27" при 96 dpi */
 #define PV_LANDSCAPE_W 1123.0f   /* A4 альбомный: 297 мм */
@@ -360,12 +361,8 @@ static void PaintPv(HWND hWnd, HDC hdc)
    главного тулбара; если файла нет — кнопки только с текстом). */
 static void CreatePvToolbar(HWND hWnd)
 {
-    char path[MAX_PATH];
     HIMAGELIST himl = NULL;
-    GetModuleFileNameA(NULL, path, MAX_PATH);
-    { char *sl = strrchr(path, '\\'); if (sl) *(sl + 1) = 0; }
-    strcat(path, "toolbar.bmp");
-    HBITMAP hStrip = (HBITMAP)LoadImageA(NULL, path, IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
+    HBITMAP hStrip = (HBITMAP)LoadImageA(GetModuleHandleA(NULL), MAKEINTRESOURCEA(IDB_TOOLBAR), IMAGE_BITMAP, 0, 0, 0);
     if (hStrip) {
         himl = ImageList_Create(16, 16, ILC_COLOR24 | ILC_MASK, 20, 4);
         ImageList_AddMasked(himl, hStrip, RGB(192, 192, 192));

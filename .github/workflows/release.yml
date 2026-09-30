@@ -25,30 +25,22 @@ jobs:
 
       - name: Собрать
         run: |
-          mkdir -p build
+          mkdir -p build obj
+          # RichEdit, иконки, шрифты и справка встраиваются в exe ресурсами (src/app.rc)
+          i686-w64-mingw32-windres -Isrc -I. -O coff src/app.rc -o obj/app_res.o
           i686-w64-mingw32-gcc \
             -D_WIN32_WINNT=0x0400 -DWINVER=0x0400 -mwindows -O2 -Wall \
             -finput-charset=UTF-8 -fexec-charset=CP1251 \
-            src/main.c src/printer.c src/preview.c \
+            src/main.c src/printer.c src/preview.c obj/app_res.o \
             -o build/sm6337edit.exe \
             -lcomctl32 -lcomdlg32 -lgdi32 -lshell32
-          cp redist/riched20.dll redist/riched32.dll build/
-          cp redist/icons/toolbar.bmp build/
-          cp help/sm6337edit.cnt build/
-          cp redist/sm6337edit.hlp build/ || true
-          cp redist/fonts/*.ttf redist/fonts/OFL.txt build/ || true
-
-      - name: Упаковать
-        run: |
-          cd build
-          zip -r "../sm6337edit-${{ github.event.inputs.tag }}.zip" .
 
       - name: Создать релиз
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "${{ github.event.inputs.tag }}" \
-            "sm6337edit-${{ github.event.inputs.tag }}.zip" \
+            build/sm6337edit.exe \
             --title "SM6337 Edit ${{ github.event.inputs.tag }}" \
             --generate-notes \
             --target "${{ github.sha }}"

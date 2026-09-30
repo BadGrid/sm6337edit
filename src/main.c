@@ -1265,17 +1265,11 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
             /* Свой битмап-файл вместо HINST_COMMCTRL/TB_LOADIMAGES — та штука
                молча не сработала (кнопки создавались, но без картинок). Полоса
                из 18 иконок 16x16 (15 настоящих Win98 + наша настройка СМ6337 +
-               Bold/Underline из настоящего wordpad.exe) лежит рядом с exe, как
+               Bold/Underline из настоящего wordpad.exe) встроена в exe (ресурс IDB_TOOLBAR), как
                riched20.dll — полный контроль, без зависимости от того, что
                реально лежит в comctl32.dll. */
             int idxSetup = -1;
-            char exeDir[MAX_PATH] = "";
-            GetModuleFileNameA(NULL, exeDir, MAX_PATH);
-            char *slash = strrchr(exeDir, '\\');
-            if (slash) *(slash + 1) = 0;
-            char stripPath[MAX_PATH];
-            strcpy(stripPath, exeDir); strcat(stripPath, "toolbar.bmp");
-            HBITMAP hStrip = (HBITMAP)LoadImageA(NULL, stripPath, IMAGE_BITMAP, 0, 0, LR_LOADFROMFILE);
+            HBITMAP hStrip = (HBITMAP)LoadImageA(GetModuleHandleA(NULL), MAKEINTRESOURCEA(IDB_TOOLBAR), IMAGE_BITMAP, 0, 0, 0);
             HIMAGELIST himl = ImageList_Create(16, 16, ILC_COLOR24 | ILC_MASK, 16, 4);
             if (hStrip) {
                 ImageList_AddMasked(himl, hStrip, RGB(192, 192, 192));
@@ -1783,19 +1777,72 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
     return DefWindowProcA(hWnd, msg, wParam, lParam);
 }
 
+/* Всё, что нужно программе (иконки, DLL RichEdit, шрифты, справка), встроено в exe. DLL, шрифты и справка
+   должны лежать в файлах (LoadLibrary, AddFontResource и WinHelp работают с путями, а AddFontMemResourceEx
+   есть только с Windows 2000), поэтому при запуске они раскладываются в %TEMP%\SM6337Edit\. Уже лежащий
+   такой же файл не перезаписывается (можно запускать несколько копий), устаревший заменяется. */
+static BOOL ExtractRes(HINSTANCE hInst, int id, const char *path)
+{
+    HRSRC r = FindResourceA(hInst, MAKEINTRESOURCEA(id), (LPCSTR)RT_RCDATA);
+    HGLOBAL g = r ? LoadResource(hInst, r) : NULL;
+    const void *data = g ? LockResource(g) : NULL;
+    DWORD size = r ? SizeofResource(hInst, r) : 0;
+    HANDLE f;
+    DWORD done = 0;
+    if (!data || !size) return FALSE;
+
+    f = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (f != INVALID_HANDLE_VALUE) {
+        BOOL same = FALSE;
+        if (GetFileSize(f, NULL) == size) {
+            unsigned char *cur = (unsigned char *)HeapAlloc(GetProcessHeap(), 0, size);
+            if (cur) {
+                DWORD got = 0;
+                same = ReadFile(f, cur, size, &got, NULL) && got == size && memcmp(cur, data, size) == 0;
+                HeapFree(GetProcessHeap(), 0, cur);
+            }
+        }
+        CloseHandle(f);
+        if (same) return TRUE;
+    }
+    f = CreateFileA(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (f == INVALID_HANDLE_VALUE)   /* занят другой копией программы — берём то, что лежит */
+        return GetFileAttributesA(path) != 0xFFFFFFFF;
+    WriteFile(f, data, size, &done, NULL);
+    CloseHandle(f);
+    return done == size;
+}
+
+/* Раскладывает встроенные файлы в %TEMP%\SM6337Edit\ и возвращает путь к этой папке (с '\\' на конце). */
+static void PrepareResourceDir(HINSTANCE hInst, char *dir)
+{
+    static const struct { int id; const char *name; } files[] = {
+        { IDR_RICHED20, "riched20.dll" }, { IDR_RICHED32, "riched32.dll" },
+        { IDR_FONT10, "sm6337-10.ttf" }, { IDR_FONT12, "sm6337-12.ttf" },
+        { IDR_FONT17, "sm6337-17.ttf" }, { IDR_FONTW, "sm6337-w.ttf" },
+        { IDR_FONTLICENSE, "OFL.txt" },
+        { IDR_HELP, "sm6337edit.hlp" }, { IDR_HELPCNT, "sm6337edit.cnt" }
+    };
+    int i;
+    char path[MAX_PATH];
+    GetTempPathA(MAX_PATH - 20, dir);
+    strcat(dir, "SM6337Edit\\");
+    CreateDirectoryA(dir, NULL);   /* уже есть — не страшно */
+    for (i = 0; i < (int)(sizeof(files) / sizeof(files[0])); i++) {
+        strcpy(path, dir); strcat(path, files[i].name);
+        ExtractRes(hInst, files[i].id, path);
+    }
+}
+
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow)
 {
     (void)hPrevInstance;
 
-    char exePathA[MAX_PATH] = "";
+    char exePathA[MAX_PATH] = ""; /* папка распакованных ресурсов (не папка exe) */
     char dllPath20[MAX_PATH] = "", dllPath32[MAX_PATH] = "";
     DWORD err20 = 0, err32 = 0;
     {
-        DWORD gotA = GetModuleFileNameA(NULL, exePathA, MAX_PATH);
-        if (gotA > 0) {
-            char *slashA = strrchr(exePathA, '\\');
-            if (slashA) *(slashA + 1) = 0;
-        }
+        PrepareResourceDir(hInstance, exePathA);
 
         strcpy(g_helpPath, exePathA); strcat(g_helpPath, "sm6337edit.hlp");
         LoadPitchFonts(exePathA);

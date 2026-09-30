@@ -59,4 +59,15 @@
 #define IDC_CHK_LANDSCAPE   2015
 #define IDC_CHK_FILENAME    2016
 
+/* встроенные в exe ресурсы (см. app.rc): иконки тулбара, DLL RichEdit, шрифты, справка */
+#define IDB_TOOLBAR         9001
+#define IDR_RICHED20        9002
+#define IDR_RICHED32        9003
+#define IDR_FONT10          9004
+#define IDR_FONT12          9005
+#define IDR_FONT17          9006
+#define IDR_FONTW           9007
+#define IDR_HELP            9008
+#define IDR_HELPCNT         9009
+#define IDR_FONTLICENSE     9010
 #endif

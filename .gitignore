@@ -17,3 +17,4 @@ tools/ocrspace.sh
 # Временные файлы WinHelp
 *.gid
 *.fts
+obj/

@@ -26,7 +26,7 @@ text comes out crisp, as if printed from the printer's own ROM font.
 - Things WordPad does not have because they are about the printer itself:
   - double-strike (ESC G/H) and expanded (ESC W) printing
   - pitch 10/12/17 cpi (Pica / Elite / Pica+Condensed) — shown on screen with different widths at the
-    same character height (own fonts from `redist/fonts/`)
+    same character height (own fonts embedded in the exe)
   - superscript / subscript (ESC S/T)
   - code page: standard PC table 14 or the additional CP866-compatible table 15 (ESC R)
 - Custom page limits (characters per line, lines per page, left margin, line spacing) — line wrapping
@@ -51,9 +51,10 @@ text comes out crisp, as if printed from the printer's own ROM font.
 
 ## Download
 
-A ready-made build (exe + the required DLLs and icons) is published in
-[Releases](../../releases) as one zip archive — unpack the whole folder onto a Win98 SE machine.
-Report problems through [Issues](../../issues/new/choose).
+A ready-made build is a single file, `sm6337edit.exe`: RichEdit, icons, fonts and help are embedded in it.
+It is published in [Releases](../../releases); copy it to a Win98 SE machine and run it. On startup the
+program unpacks the embedded DLLs, fonts and help into `%TEMP%\SM6337Edit\` (files already there are not
+rewritten). Report problems through [Issues](../../issues/new/choose).
 
 ## Building
 
@@ -67,24 +68,24 @@ You need the `i686-w64-mingw32` toolchain (msvcrt, win32-threads, **not** UCRT),
 make
 ```
 
-The result is `build/sm6337edit.exe` with `riched20.dll`, `riched32.dll`, `toolbar.bmp` and the help
-files `sm6337edit.hlp` / `sm6337edit.cnt` next to it. Copy the whole `build/` folder to the target
-machine.
+The result is a single file, `build/sm6337edit.exe` (about 800 KB): icons, RichEdit, fonts and help are
+embedded into it as resources (`src/app.rc`), nothing else has to be copied.
 
 ### GitHub Actions
 
-On every push to `master` and every pull request the repository builds `build/` with the same
+On every push to `master` and every pull request the repository builds `sm6337edit.exe` with the same
 toolchain (`.github/workflows/build.yml`) and puts it into the Artifacts of that run on the Actions
-tab, so you can download a ready folder without a local toolchain.
+tab, so you can download a ready file without a local toolchain.
 
 ## Repository layout
 
 - `src/` — sources (`main.c`, `printer.c`/`printer.h` — printing and code pages, `preview.c`/`preview.h` —
   print preview, `resource.h`)
 - `help/` — help sources (RTF, project and contents); how to compile them is in `help/README.md`
-- `redist/` — `riched20.dll` / `riched32.dll` (RichEdit from Win98 SE), `icons/toolbar.bmp`, the
-  compiled help `sm6337edit.hlp` and `fonts/` — the pitch 10/12/17 fonts (derived from Noto Sans Mono,
-  OFL license)
+- `redist/` — what gets embedded into the exe: `riched20.dll` / `riched32.dll` (RichEdit from Win98 SE),
+  `icons/toolbar.bmp`, the compiled help `sm6337edit.hlp` and `fonts/` — the pitch 10/12/17 fonts
+  (derived from Noto Sans Mono, OFL license)
+- `src/app.rc` — the list of embedded resources
 - `printer_commands.md` — reference of ESC/P commands and code tables of the SM6337, compiled by hand
   from the manual (`СМ6337 РЭ.djvu`); in Russian
 - `rom/` — dump of the printer's character generator
