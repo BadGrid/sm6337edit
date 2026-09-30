@@ -1,0 +1,37 @@
+name: build
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Установить mingw32 (i686, msvcrt)
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q gcc-mingw-w64-i686
+
+      - name: Собрать
+        run: |
+          mkdir -p build
+          i686-w64-mingw32-gcc \
+            -D_WIN32_WINNT=0x0400 -DWINVER=0x0400 -mwindows -O2 -Wall \
+            -finput-charset=UTF-8 -fexec-charset=CP1251 \
+            src/main.c src/printer.c \
+            -o build/sm6337edit.exe \
+            -lcomctl32 -lcomdlg32 -lgdi32
+          cp redist/riched20.dll redist/riched32.dll build/
+          cp redist/icons/toolbar.bmp build/
+
+      - name: Загрузить build/
+        uses: actions/upload-artifact@v4
+        with:
+          name: sm6337edit-build
+          path: build/
+          retention-days: 30
