@@ -636,7 +636,11 @@ static unsigned char *BuildPrintJob(const Sm6337Settings *settings, int *outLine
     BOOL bold = FALSE, underline = FALSE, elite = FALSE, condensed = FALSE;
     BOOL doubleStrike = FALSE, expanded = FALSE;
     int curIndex = 0; /* 0=обычный, 1=верхний индекс, 2=нижний индекс */
-    double colF = 0.0; int lineCount = 1;
+    /* левое поле (ESC l) — это отступ от края бумаги: строка начинается не с колонки 0, а с
+       колонки leftMargin, и правая граница cols отсчитывается от края бумаги, поэтому текста
+       в строке помещается на leftMargin знаков меньше */
+    const double startCol = (double)settings->leftMargin;
+    double colF = startCol; int lineCount = 1;
     BOOL software = (settings->pageMode == SM_PAGEMODE_SOFTWARE);
 
     for (int i = 0; i < len; i++) {
@@ -645,7 +649,7 @@ static unsigned char *BuildPrintJob(const Sm6337Settings *settings, int *outLine
 
         if (raw == '\n') {
             buf[n++] = 0x0D; buf[n++] = 0x0A;
-            colF = 0.0; lineCount++;
+            colF = startCol; lineCount++;
             continue;
         }
 
@@ -662,7 +666,7 @@ static unsigned char *BuildPrintJob(const Sm6337Settings *settings, int *outLine
 
         if (software && colF + 10.0 / cpi > (double)settings->cols + 0.001) { /* знак целиком должен влезать (расширенный — 2 колонки) */
             buf[n++] = 0x0D; buf[n++] = 0x0A;
-            colF = 0.0; lineCount++;
+            colF = startCol; lineCount++;
         }
 
         if (wantElite != elite) {
