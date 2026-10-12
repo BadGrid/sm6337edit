@@ -645,6 +645,14 @@ static void UnloadPitchFonts(void)
     g_fontsLoaded = 0;
 }
 
+/* Старая схема «расширенного» без своих шрифтов: тот же шрифт, но кегль 14 pt (280). Признак узкий —
+   именно 280 и именно основной шрифт, — чтобы обычный документ с крупным заголовком (любой другой
+   размер или шрифт) не печатался расширенным. */
+static BOOL IsLegacyExpanded(const char *face, long yHeight)
+{
+    return yHeight == 280 && (strcmp(face, "Courier New") == 0 || strcmp(face, g_faceNormal) == 0);
+}
+
 static double PitchCpiFromFormat(const char *face, long yHeight, BOOL *outElite, BOOL *outCondensed, BOOL *outExpanded)
 {
     *outElite = FALSE; *outCondensed = FALSE; *outExpanded = FALSE;
@@ -656,7 +664,7 @@ static double PitchCpiFromFormat(const char *face, long yHeight, BOOL *outElite,
     if (strcmp(face, SM_PITCH_FACE_ELITE) == 0 || strcmp(face, SM_FONT_OWN_ELITE) == 0 || strcmp(face, "Terminal") == 0)     { *outElite = TRUE; return 12.0; }
     if (strcmp(face, SM_PITCH_FACE_CONDENSED) == 0 || strcmp(face, SM_FONT_OWN_COND) == 0 || strcmp(face, "Small Fonts") == 0) { *outCondensed = TRUE; return 17.16; }
     /* Pica+Expanded — вдвое шире: свой широкий шрифт, а без своих шрифтов — крупный кегль */
-    if ((g_faceWide[0] && strcmp(face, g_faceWide) == 0) || strcmp(face, SM_FONT_OWN_WIDE) == 0 || yHeight >= 260) { *outExpanded = TRUE; return 5.0; }
+    if ((g_faceWide[0] && strcmp(face, g_faceWide) == 0) || strcmp(face, SM_FONT_OWN_WIDE) == 0 || IsLegacyExpanded(face, yHeight)) { *outExpanded = TRUE; return 5.0; }
     return 10.0;
 }
 
@@ -1015,7 +1023,7 @@ static void UpdateToolbarState(void)
     TbCheck(IDM_FORMAT_SUPERSCRIPT, (cf.dwMask & CFM_SUPERSCRIPT) && (cf.dwEffects & CFE_SUPERSCRIPT));
     TbCheck(IDM_FORMAT_SUBSCRIPT, (cf.dwMask & CFM_SUBSCRIPT) && (cf.dwEffects & CFE_SUBSCRIPT));
     TbCheck(IDM_FORMAT_EXPANDED, ((cf.dwMask & CFM_FACE) && g_faceWide[0] && strcmp(cf.szFaceName, g_faceWide) == 0) ||
-                                 ((cf.dwMask & CFM_SIZE) && cf.yHeight >= 260));
+                                 ((cf.dwMask & CFM_SIZE) && (cf.dwMask & CFM_FACE) && IsLegacyExpanded(cf.szFaceName, cf.yHeight)));
     BOOL faceKnown = (cf.dwMask & CFM_FACE) != 0;
     TbCheck(IDM_FORMAT_PITCH12, faceKnown && strcmp(cf.szFaceName, SM_PITCH_FACE_ELITE) == 0);
     TbCheck(IDM_FORMAT_PITCH17, faceKnown && strcmp(cf.szFaceName, SM_PITCH_FACE_CONDENSED) == 0);
@@ -1579,7 +1587,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
             cf.cbSize = sizeof(cf);
             SendMessageA(g_hEdit, EM_GETCHARFORMAT, SCF_SELECTION, (LPARAM)&cf);
             BOOL already = ((cf.dwMask & CFM_FACE) && g_faceWide[0] && strcmp(cf.szFaceName, g_faceWide) == 0) ||
-                           ((cf.dwMask & CFM_SIZE) && cf.yHeight >= 260);
+                           ((cf.dwMask & CFM_SIZE) && (cf.dwMask & CFM_FACE) && IsLegacyExpanded(cf.szFaceName, cf.yHeight));
             ZeroMemory(&cf, sizeof(cf));
             cf.cbSize = sizeof(cf);
             cf.dwMask = CFM_FACE | CFM_SIZE | CFM_CHARSET;
