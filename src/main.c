@@ -818,6 +818,9 @@ static unsigned char *BuildPrintJob(const Sm6337Settings *settings, int *outLine
         int feedLines = settings->feedLinesAfterPrint;
         if (feedLines < 0) feedLines = 0;
         if (feedLines > 9) feedLines = 9;
+        /* принтер печатает строку только по CR/LF: если пустых строк 0, а документ закончился не
+           переводом строки, последняя строка осталась бы в буфере принтера непропечатанной */
+        if (feedLines == 0 && n >= 2 && !(buf[n - 2] == 0x0D && buf[n - 1] == 0x0A)) { buf[n++] = 0x0D; buf[n++] = 0x0A; }
         for (int i = 0; i < feedLines; i++) { buf[n++] = 0x0D; buf[n++] = 0x0A; }
     } else {
         buf[n++] = 0x0C; /* ПФ — классический форм-фид */
