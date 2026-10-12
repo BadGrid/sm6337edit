@@ -650,10 +650,13 @@ static double PitchCpiFromFormat(const char *face, long yHeight, BOOL *outElite,
     *outElite = FALSE; *outCondensed = FALSE; *outExpanded = FALSE;
     /* старые названия оставляем распознаваемыми: в .rtf, сохранённых до перехода на
        свои шрифты, шаг записан именно ими */
-    if (strcmp(face, SM_PITCH_FACE_ELITE) == 0 || strcmp(face, "Terminal") == 0)     { *outElite = TRUE; return 12.0; }
-    if (strcmp(face, SM_PITCH_FACE_CONDENSED) == 0 || strcmp(face, "Small Fonts") == 0) { *outCondensed = TRUE; return 17.16; }
+    /* Названия своих шрифтов узнаём всегда, а не только когда файлы подключены: .rtf сохранён с
+       «SM6337 Mono 12», а открыт там, где шрифтов нет (другая машина, не подхватились) — шаг при
+       печати всё равно должен быть тот, что выбран в документе. */
+    if (strcmp(face, SM_PITCH_FACE_ELITE) == 0 || strcmp(face, SM_FONT_OWN_ELITE) == 0 || strcmp(face, "Terminal") == 0)     { *outElite = TRUE; return 12.0; }
+    if (strcmp(face, SM_PITCH_FACE_CONDENSED) == 0 || strcmp(face, SM_FONT_OWN_COND) == 0 || strcmp(face, "Small Fonts") == 0) { *outCondensed = TRUE; return 17.16; }
     /* Pica+Expanded — вдвое шире: свой широкий шрифт, а без своих шрифтов — крупный кегль */
-    if ((g_faceWide[0] && strcmp(face, g_faceWide) == 0) || yHeight >= 260) { *outExpanded = TRUE; return 5.0; }
+    if ((g_faceWide[0] && strcmp(face, g_faceWide) == 0) || strcmp(face, SM_FONT_OWN_WIDE) == 0 || yHeight >= 260) { *outExpanded = TRUE; return 5.0; }
     return 10.0;
 }
 
