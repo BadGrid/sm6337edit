@@ -1397,11 +1397,12 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
         return 0;
     case WM_SIZE: {
         if (g_hToolbar) SendMessageA(g_hToolbar, WM_SIZE, 0, 0);
-        RECT rcTB; GetWindowRect(g_hToolbar, &rcTB);
+        RECT rcTB = { 0, 0, 0, 0 };
+        if (g_hToolbar) GetWindowRect(g_hToolbar, &rcTB);
         int toolbarHeight = rcTB.bottom - rcTB.top;
         if (g_hStatus) SendMessageA(g_hStatus, WM_SIZE, 0, 0);
-        RECT rcStatus;
-        GetWindowRect(g_hStatus, &rcStatus);
+        RECT rcStatus = { 0, 0, 0, 0 };
+        if (g_hStatus) GetWindowRect(g_hStatus, &rcStatus);
         int statusHeight = rcStatus.bottom - rcStatus.top;
         int w = LOWORD(lParam), h = HIWORD(lParam);
         if (g_hEdit) MoveWindow(g_hEdit, 0, toolbarHeight, w, h - statusHeight - toolbarHeight, TRUE);
@@ -1705,7 +1706,9 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
             }
 
             char err[256] = "";
+            HCURSOR oldCur = SetCursor(LoadCursorA(NULL, (LPCSTR)IDC_WAIT)); /* запись в порт блокирует окно, пока принтер принимает данные */
             BOOL ok = Sm6337_PrintRaw(job, jobLen, err, 256);
+            SetCursor(oldCur);
             HeapFree(GetProcessHeap(), 0, job);
 
             if (!ok) MessageBoxA(hWnd, err, "Ошибка печати", MB_OK | MB_ICONERROR);
@@ -1890,6 +1893,16 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
             g_hRichEdit = LoadLibraryA(pathA);
             if (!g_hRichEdit) err32 = GetLastError();
             g_richEditClass = "RichEdit";
+        }
+    }
+    if (!g_hRichEdit) {
+        /* встроенные DLL не распаковались или не загрузились (нет прав на %TEMP%, диск только для чтения,
+           антивирус) — пробуем те, что есть в системе: Win98 SE и новее их содержат */
+        g_hRichEdit = LoadLibraryA("riched20.dll");
+        if (g_hRichEdit) g_richEditClass = "RichEdit20A";
+        else {
+            g_hRichEdit = LoadLibraryA("riched32.dll");
+            if (g_hRichEdit) g_richEditClass = "RichEdit";
         }
     }
     if (!g_hRichEdit) {
