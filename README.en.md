@@ -49,6 +49,38 @@ text comes out crisp, as if printed from the printer's own ROM font.
 - Toolbar: tooltips on every button, grayed-out buttons for unavailable actions, pressed buttons for the
   formatting of the current selection (bold/underline/pitch/subscript etc.)
 
+## How formatting becomes printer commands
+
+The program does not keep "pitch" as a separate attribute — RichEdit has no such thing. The pitch is
+derived from the **font name** and character height of each run of text:
+
+| Font in the text | What the printer gets |
+|---|---|
+| `SM6337 Mono 10` or `Courier New` | 10 cpi (Pica) |
+| `SM6337 Mono 12` | 12 cpi (Elite, ESC M) |
+| `SM6337 Mono 17` | 17 cpi (condensed, SI) |
+| `SM6337 Mono Wide` | expanded (ESC W) |
+| `Terminal` | 12 cpi — **legacy scheme**, see below |
+| `Small Fonts` | 17 cpi — **legacy scheme**, see below |
+| `Courier New` exactly 14 pt | expanded — **legacy scheme** |
+| any other font | 10 cpi, as Pica |
+
+The rest:
+
+- bold -> ESC E, underline -> ESC -, superscript/subscript -> ESC S/T;
+- **strikeout -> double strike** (ESC G): RichEdit has no "double strike" attribute, so the least
+  useful one for printer text was borrowed; on screen it looks like ordinary strikeout;
+- **color and font size do not affect printing** (except the legacy 14 pt Courier New) — the printer is
+  monochrome and only the pitch sets the character width;
+- if the own `SM6337 Mono *` fonts are missing (could not be installed), the screen shows some substitute
+  and on-screen widths no longer match the print; the ESC/P stream is unaffected, because it is built
+  from the font name stored in the file.
+
+**Legacy scheme.** The first versions had no own fonts and encoded the pitch with Windows raster fonts:
+`Terminal` is 12, `Small Fonts` is 17, Courier New 14 pt is expanded. It is kept for old `.rtf` files.
+Side effect: a foreign document set in `Terminal` or `Small Fonts` prints at a different pitch than it
+looks. Use `SM6337 Mono *` in new documents.
+
 ## Download
 
 [Releases](../../releases) has two variants of the same program:
