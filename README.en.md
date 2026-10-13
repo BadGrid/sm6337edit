@@ -29,6 +29,11 @@ text comes out crisp, as if printed from the printer's own ROM font.
     same character height (own fonts embedded in the exe)
   - superscript / subscript (ESC S/T)
   - code page: standard PC table 14 or the additional CP866-compatible table 15 (ESC R)
+- WordPad-style paragraph formatting: left, center, right and justified alignment (Ctrl+L/E/R/J), left
+  and first-line indent, tab stops (including right and centered ones — "date ... No. number" on one
+  line). The printer cannot do this itself, so the program works from the real character widths and
+  prints spaces: paper and print preview match. Lines wrap at word boundaries. Justify works only if the
+  RichEdit version supports it (RichEdit 2.0 from Win98 does not: the paragraph stays left-aligned)
 - Custom page limits (characters per line, lines per page, left margin, line spacing) — line wrapping
   either in the editor or by the printer (ESC Q/C)
 - Landscape orientation (a switch in the print settings): turning it on converts the page size
