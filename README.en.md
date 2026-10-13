@@ -154,7 +154,7 @@ writes directly to LPT1 through `CreateFileA("LPT1", ...)`.
   system `riched20.dll`.
 - **`redist/fonts/*.ttf`** — derivatives of Noto Sans Mono, SIL OFL 1.1 (`redist/fonts/OFL.txt`).
 - **`rom/`** and `СМ6337 РЭ.djvu` — a dump of the printer's ROM and a scan of its user manual, kept as
-  reference material; the program does not use them. The origin of the dump is not established.
+  reference material; the program does not use them.
 
 Status: **beta**. Printing has been checked on a real СМ6337, but the program was mostly written without
 running it on Windows 98 SE — bugs are possible. Please report them in Issues.
