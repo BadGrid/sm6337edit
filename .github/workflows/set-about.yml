@@ -16,7 +16,7 @@ jobs:
           GH_TOKEN: ${{ secrets.REPO_ADMIN_TOKEN }}
         run: |
           if [ -z "$GH_TOKEN" ]; then echo "Нет секрета REPO_ADMIN_TOKEN (Settings → Secrets and variables → Actions)"; exit 1; fi
-          topics="sm6337 sm-6337 cm6337 dot-matrix-printer escp lpt parallel-port windows-98 win98 win32 winapi c richedit rtf text-editor wordpad print-preview retro-computing winhelp russian"
+          topics="sm6337 sm-6337 cm6337 dot-matrix-printer escp esc-p lpt parallel-port windows-98 win98 win9x win32 winapi c richedit text-editor wordpad retro-computing printing russian"
           args=()
           for t in $topics; do args+=(-f "names[]=$t"); done
           gh api -X PATCH "repos/$GITHUB_REPOSITORY" \
