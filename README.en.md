@@ -143,6 +143,22 @@ programs were historically built, and it is genuinely more reliable on that OS.
 Real Windows 98 SE (or a compatible Win9x) only — the program uses the `*A` (ANSI) Win32 API and
 writes directly to LPT1 through `CreateFileA("LPT1", ...)`.
 
+## Third-party components
+
+- **`redist/riched20.dll`, `redist/riched32.dll`** — RichEdit libraries (Richedit 2.0, © Microsoft
+  Corporation, 1997). They are **not** covered by this project's MIT license and are not the author's:
+  they sit in the repository and are embedded in the exe only because the program will not start on a
+  bare Windows 98 SE without them. The rights belong to Microsoft; if you are the rights holder and
+  object, open an Issue and they will be removed. To build without them, take your own copies from a
+  Windows 98 or Office distribution and put them in `redist/`; at startup the program first tries the
+  system `riched20.dll`.
+- **`redist/fonts/*.ttf`** — derivatives of Noto Sans Mono, SIL OFL 1.1 (`redist/fonts/OFL.txt`).
+- **`rom/`** and `СМ6337 РЭ.djvu` — a dump of the printer's ROM and a scan of its user manual, kept as
+  reference material; the program does not use them. The origin of the dump is not established.
+
+Status: **beta**. Printing has been checked on a real СМ6337, but the program was mostly written without
+running it on Windows 98 SE — bugs are possible. Please report them in Issues.
+
 ## Authorship
 
 The project is developed by its author together with the AI assistant Claude (Anthropic): the
