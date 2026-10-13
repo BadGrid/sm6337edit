@@ -571,6 +571,13 @@ static HMENU BuildMenu(void)
     AppendMenuA(hFormat, MF_SEPARATOR, 0, NULL);
     AppendMenuA(hFormat, MF_STRING, IDM_FORMAT_SUPERSCRIPT, "Верхний &индекс");
     AppendMenuA(hFormat, MF_STRING, IDM_FORMAT_SUBSCRIPT, "Нижний инде&кс");
+    AppendMenuA(hFormat, MF_SEPARATOR, 0, NULL);
+    AppendMenuA(hFormat, MF_STRING, IDM_PARA_LEFT, "По &левому краю\tCtrl+L");
+    AppendMenuA(hFormat, MF_STRING, IDM_PARA_CENTER, "По &центру\tCtrl+E");
+    AppendMenuA(hFormat, MF_STRING, IDM_PARA_RIGHT, "По &правому краю\tCtrl+R");
+    AppendMenuA(hFormat, MF_STRING, IDM_PARA_JUSTIFY, "По &ширине\tCtrl+J");
+    AppendMenuA(hFormat, MF_STRING, IDM_PARA_INDENT, "&Увеличить отступ слева");
+    AppendMenuA(hFormat, MF_STRING, IDM_PARA_OUTDENT, "У&меньшить отступ слева");
     AppendMenuA(hMenu, MF_POPUP, (UINT_PTR)hFormat, "Фо&рмат");
 
     HMENU hView = CreatePopupMenu();
@@ -1178,6 +1185,17 @@ static void UpdateToolbarState(void)
     TbCheck(IDM_FORMAT_PITCH17, faceKnown && strcmp(cf.szFaceName, SM_PITCH_FACE_CONDENSED) == 0);
     TbCheck(IDM_FORMAT_PITCH10, faceKnown && strcmp(cf.szFaceName, SM_PITCH_FACE_NORMAL) == 0);
 
+    {   /* выравнивание абзаца у начала выделения; смесь у разных абзацев — ни одна не нажата */
+        PARAFORMAT pf; int al = 0;
+        ZeroMemory(&pf, sizeof(pf)); pf.cbSize = sizeof(pf);
+        SendMessageA(g_hEdit, EM_GETPARAFORMAT, 0, (LPARAM)&pf);
+        if (pf.dwMask & PFM_ALIGNMENT) al = pf.wAlignment;
+        TbCheck(IDM_PARA_LEFT, al == PFA_LEFT);
+        TbCheck(IDM_PARA_CENTER, al == PFA_CENTER);
+        TbCheck(IDM_PARA_RIGHT, al == PFA_RIGHT);
+        TbCheck(IDM_PARA_JUSTIFY, al == PFA_JUSTIFY);
+    }
+
     /* Строка состояния: что сейчас у выделения/курсора. Заодно показывает, подключились ли
        свои шрифты шага — так сразу видно, почему шаг не меняет вид. */
     if (g_hStatus) {
@@ -1211,7 +1229,8 @@ static void SyncMenuWithToolbar(HMENU hm)
         IDM_EDIT_UNDO, IDM_EDIT_REDO, IDM_EDIT_CUT, IDM_EDIT_COPY, IDM_EDIT_PASTE,
         IDM_FORMAT_BOLD, IDM_FORMAT_UNDERLINE, IDM_FORMAT_PITCH10, IDM_FORMAT_PITCH12,
         IDM_FORMAT_PITCH17, IDM_FORMAT_DOUBLESTRIKE, IDM_FORMAT_EXPANDED,
-        IDM_FORMAT_SUPERSCRIPT, IDM_FORMAT_SUBSCRIPT
+        IDM_FORMAT_SUPERSCRIPT, IDM_FORMAT_SUBSCRIPT,
+        IDM_PARA_LEFT, IDM_PARA_CENTER, IDM_PARA_RIGHT, IDM_PARA_JUSTIFY
     };
     UpdateToolbarState();
     for (int i = 0; i < (int)(sizeof(ids) / sizeof(ids[0])); i++) {
@@ -1287,6 +1306,41 @@ static void SetTabStops(void)
     }
     SendMessageA(g_hEdit, EM_EXSETSEL, 0, (LPARAM)&old);
     HeapFree(GetProcessHeap(), 0, text);
+}
+
+/* Выравнивание и отступ слева у абзацев выделения (или у абзаца с курсором). Печать читает тот же формат
+   абзаца и раскладывает его пробелами (BuildPrintJob), так что экран и бумага совпадают. Шаг отступа —
+   4 колонки пики (576 твипов). */
+static void ParaCommand(int cmd)
+{
+    PARAFORMAT pf;
+    ZeroMemory(&pf, sizeof(pf)); pf.cbSize = sizeof(pf);
+    if (cmd == IDM_PARA_INDENT || cmd == IDM_PARA_OUTDENT) {
+        long cur;
+        SendMessageA(g_hEdit, EM_GETPARAFORMAT, 0, (LPARAM)&pf);
+        cur = (pf.dwMask & PFM_STARTINDENT) ? pf.dxStartIndent : 0;
+        cur += (cmd == IDM_PARA_INDENT) ? 576 : -576;
+        if (cur < 0) cur = 0;
+        if (cur > 576 * 15) cur = 576 * 15;
+        ZeroMemory(&pf, sizeof(pf)); pf.cbSize = sizeof(pf);
+        pf.dwMask = PFM_STARTINDENT;
+        pf.dxStartIndent = cur;
+    } else {
+        pf.dwMask = PFM_ALIGNMENT;
+        pf.wAlignment = (cmd == IDM_PARA_CENTER) ? PFA_CENTER : (cmd == IDM_PARA_RIGHT) ? PFA_RIGHT :
+                        (cmd == IDM_PARA_JUSTIFY) ? PFA_JUSTIFY : PFA_LEFT;
+    }
+    SendMessageA(g_hEdit, EM_SETPARAFORMAT, 0, (LPARAM)&pf);
+    if (cmd == IDM_PARA_JUSTIFY) {
+        /* RichEdit 2.0 «по ширине» не знает: формат не запомнится, и печатать тоже будет нечем */
+        PARAFORMAT chk;
+        ZeroMemory(&chk, sizeof(chk)); chk.cbSize = sizeof(chk);
+        SendMessageA(g_hEdit, EM_GETPARAFORMAT, 0, (LPARAM)&chk);
+        if (!((chk.dwMask & PFM_ALIGNMENT) && chk.wAlignment == PFA_JUSTIFY))
+            MessageBoxA(GetParent(g_hEdit), "Эта версия RichEdit не умеет выравнивание по ширине: абзац остался выровненным по левому краю.",
+                        "SM6337 Edit", MB_OK | MB_ICONINFORMATION);
+    }
+    SendMessageA(g_hEdit, EM_SETMODIFY, TRUE, 0);
 }
 
 static void SetDocTitle(HWND hWnd)
@@ -1435,6 +1489,12 @@ static const char *ToolbarTip(UINT id)
     case IDM_FORMAT_EXPANDED: return "Расширенная печать";
     case IDM_FORMAT_SUPERSCRIPT: return "Верхний индекс";
     case IDM_FORMAT_SUBSCRIPT: return "Нижний индекс";
+    case IDM_PARA_LEFT: return "По левому краю";
+    case IDM_PARA_CENTER: return "По центру";
+    case IDM_PARA_RIGHT: return "По правому краю";
+    case IDM_PARA_JUSTIFY: return "По ширине";
+    case IDM_PARA_INDENT: return "Увеличить отступ слева";
+    case IDM_PARA_OUTDENT: return "Уменьшить отступ слева";
     case IDM_JOKE_CRASH: return "Закрыть программу";
     }
     return NULL;
@@ -1475,7 +1535,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
             }
             SendMessageA(g_hToolbar, TB_SETIMAGELIST, 0, (LPARAM)himl);
 
-            TBBUTTON btns[32]; ZeroMemory(btns, sizeof(btns));
+            TBBUTTON btns[48]; ZeroMemory(btns, sizeof(btns));
             int bi = 0;
             btns[bi].iBitmap = STD_FILENEW; btns[bi].idCommand = IDM_FILE_NEW; btns[bi].fsState = TBSTATE_ENABLED; btns[bi].fsStyle = TBSTYLE_BUTTON; bi++;
             btns[bi].iBitmap = STD_FILEOPEN; btns[bi].idCommand = IDM_FILE_OPEN; btns[bi].fsState = TBSTATE_ENABLED; btns[bi].fsStyle = TBSTYLE_BUTTON; bi++;
@@ -1506,6 +1566,15 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
                     IDM_FORMAT_DOUBLESTRIKE, IDM_FORMAT_EXPANDED, IDM_FORMAT_SUPERSCRIPT, IDM_FORMAT_SUBSCRIPT };
                 for (int k = 0; k < 7; k++) {
                     btns[bi].iBitmap = 18 + k; btns[bi].idCommand = fmtIds[k]; btns[bi].fsState = TBSTATE_ENABLED; btns[bi].fsStyle = TBSTYLE_CHECK; bi++;
+                }
+            }
+            btns[bi].fsStyle = TBSTYLE_SEP; bi++;
+            {   /* ячейки 25..30 полосы: выравнивание абзаца и отступ */
+                static const int paraIds[6] = { IDM_PARA_LEFT, IDM_PARA_CENTER, IDM_PARA_RIGHT,
+                    IDM_PARA_JUSTIFY, IDM_PARA_INDENT, IDM_PARA_OUTDENT };
+                for (int k = 0; k < 6; k++) {
+                    btns[bi].iBitmap = 25 + k; btns[bi].idCommand = paraIds[k]; btns[bi].fsState = TBSTATE_ENABLED;
+                    btns[bi].fsStyle = (k < 4) ? TBSTYLE_CHECK : TBSTYLE_BUTTON; bi++;
                 }
             }
             btns[bi].fsStyle = TBSTYLE_SEP; bi++;
@@ -1618,8 +1687,14 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
             return 0;
         }
         PostMessageA(hWnd, WM_TIMER, TB_TIMER_ID, 0);
-        if (LOWORD(wParam) >= IDM_FORMAT_BOLD && LOWORD(wParam) <= IDM_FORMAT_SUBSCRIPT && g_hEdit)
+        if (LOWORD(wParam) >= IDM_FORMAT_BOLD && LOWORD(wParam) <= IDM_PARA_OUTDENT && g_hEdit)
             SetFocus(g_hEdit);
+        if (LOWORD(wParam) >= IDM_PARA_LEFT && LOWORD(wParam) <= IDM_PARA_OUTDENT) {
+            ParaCommand(LOWORD(wParam));
+            UpdateToolbarState();
+            SetDocTitle(hWnd);
+            return 0;
+        }
         if (TypingFormatCommand(LOWORD(wParam))) return 0; /* нет выделения — меняем режим набора */
         switch (LOWORD(wParam)) {
         case IDM_FILE_EXIT:
@@ -2139,6 +2214,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         { FCONTROL | FVIRTKEY, 'F', IDM_EDIT_FIND },
         { FVIRTKEY, VK_F3, IDM_EDIT_FINDNEXT },
         { FCONTROL | FVIRTKEY, 'Y', IDM_EDIT_REDO },
+        { FCONTROL | FVIRTKEY, 'L', IDM_PARA_LEFT },
+        { FCONTROL | FVIRTKEY, 'E', IDM_PARA_CENTER },
+        { FCONTROL | FVIRTKEY, 'R', IDM_PARA_RIGHT },
+        { FCONTROL | FVIRTKEY, 'J', IDM_PARA_JUSTIFY },
         { FCONTROL | FVIRTKEY, 'N', IDM_FILE_NEW },
         { FCONTROL | FVIRTKEY, 'O', IDM_FILE_OPEN },
         { FCONTROL | FVIRTKEY, 'S', IDM_FILE_SAVE },
