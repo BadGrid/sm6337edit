@@ -1,0 +1,25 @@
+name: set-about
+
+# Разовый запуск вручную: Actions → set-about → Run workflow.
+# Ставит описание и темы репозитория (блок About). Обычный GITHUB_TOKEN менять настройки
+# репозитория не может, поэтому нужен секрет REPO_ADMIN_TOKEN — personal access token с правом
+# Administration: write (fine-grained, только на этот репозиторий). После запуска токен можно удалить.
+on:
+  workflow_dispatch:
+
+jobs:
+  about:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Описание и темы
+        env:
+          GH_TOKEN: ${{ secrets.REPO_ADMIN_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then echo "Нет секрета REPO_ADMIN_TOKEN (Settings → Secrets and variables → Actions)"; exit 1; fi
+          topics="sm6337 sm-6337 cm6337 dot-matrix-printer escp esc-p lpt parallel-port windows-98 win98 windows-98-se win9x win32 win32-api winapi c richedit rtf text-editor wordpad print-preview retro-computing vintage-computing mingw cp1251 winhelp soviet russian"
+          args=()
+          for t in $topics; do args+=(-f "names[]=$t"); done
+          gh api -X PATCH "repos/$GITHUB_REPOSITORY" \
+            -f description="Редактор для Windows 98 SE с прямой печатью на принтер СМ6337 через LPT1 — без драйвера, сырым ESC/P. Шаг 10/12/17, предпросмотр, RTF. / WordPad-like editor for Win98 that prints raw ESC/P to the SM6337 dot-matrix printer." \
+            --jq '.description'
+          gh api -X PUT "repos/$GITHUB_REPOSITORY/topics" -H "Accept: application/vnd.github+json" "${args[@]}" --jq '.names | join(" ")'
