@@ -668,178 +668,316 @@ static double PitchCpiFromFormat(const char *face, long yHeight, BOOL *outElite,
     return 10.0;
 }
 
-/* Собирает поток байт ESC/P для печати: один проход по тексту RichEdit,
-   на каждом символе смотрим его формат (жирный/подчёркнутый/шаг печати) и при
-   смене шлём соответствующие ESC-команды перед байтом символа. Заодно делает
-   программный перенос строк (если pageMode == SOFTWARE, с учётом веса шага
-   печати) и считает итоговое число строк. */
+/* Состояние начертания в потоке ESC/P: что сейчас включено у принтера (cur) и чего хочет знак (want). */
+typedef struct { unsigned char bold, under, dstrike, elite, cond, expd, idx; } PrAttr; /* idx: 0 обычный, 1 верхний, 2 нижний */
+
+/* Один знак текста вместе с форматом; tab — табуляция (ширину получит при раскладке), brk — мягкий
+   перенос строки (Shift+Enter). w — ширина в «колонках пики» (10 знаков на дюйм = 1.0). */
+typedef struct { unsigned char ch; PrAttr a; double w; BOOL tab; BOOL brk; } PCell;
+
+/* Формат абзаца в колонках пики от левого поля: отступы, выравнивание, табы. */
+typedef struct {
+    int align;                 /* PFA_LEFT / PFA_RIGHT / PFA_CENTER / PFA_JUSTIFY */
+    double first, rest, right; /* отступ первой строки, остальных строк, справа */
+    double width;              /* ширина области текста (до правой границы за вычетом отступа справа) */
+    int nTabs; double tabPos[MAX_TAB_STOPS]; int tabType[MAX_TAB_STOPS]; /* 0 левый, 1 по центру, 2 правый */
+} ParaFmt;
+
+typedef struct { unsigned char *p; DWORD n, cap; BOOL fail; } PrintBuf;
+typedef struct { PrintBuf b; PrAttr cur; double colF; int lineCount; double startCol; int codeTable; } PrCtx;
+
+static void PbPut(PrintBuf *b, unsigned char c)
+{
+    if (b->fail) return;
+    if (b->n >= b->cap) {
+        DWORD nc = b->cap * 2;
+        unsigned char *np = (unsigned char *)HeapReAlloc(GetProcessHeap(), 0, b->p, nc);
+        if (!np) { b->fail = TRUE; return; }
+        b->p = np; b->cap = nc;
+    }
+    b->p[b->n++] = c;
+}
+
+/* Шлёт ESC-команды только для того, что изменилось (порядок тот же, что и раньше). */
+static void PbAttrs(PrintBuf *b, PrAttr *cur, const PrAttr *w)
+{
+    if (w->elite != cur->elite) { PbPut(b, 0x1B); PbPut(b, w->elite ? 'M' : 'P'); cur->elite = w->elite; }
+    if (w->cond != cur->cond) { PbPut(b, w->cond ? 0x0F : 0x12); cur->cond = w->cond; } /* SI вкл / DC2 выкл */
+    if (w->bold != cur->bold) { PbPut(b, 0x1B); PbPut(b, w->bold ? 'E' : 'F'); cur->bold = w->bold; }
+    if (w->under != cur->under) { PbPut(b, 0x1B); PbPut(b, '-'); PbPut(b, w->under ? 1 : 0); cur->under = w->under; }
+    if (w->dstrike != cur->dstrike) { PbPut(b, 0x1B); PbPut(b, w->dstrike ? 'G' : 'H'); cur->dstrike = w->dstrike; }
+    if (w->expd != cur->expd) { PbPut(b, 0x1B); PbPut(b, 'W'); PbPut(b, w->expd ? 1 : 0); cur->expd = w->expd; }
+    if (w->idx != cur->idx) {
+        if (w->idx == 0) { PbPut(b, 0x1B); PbPut(b, 'T'); }
+        else { PbPut(b, 0x1B); PbPut(b, 'S'); PbPut(b, (unsigned char)(w->idx == 1 ? 0 : 1)); }
+        cur->idx = w->idx;
+    }
+}
+
+/* Выравнивание, отступы и табуляция печатаются пробелами: ESC l («левое поле») действует на весь
+   лист и не умеет ни центрировать, ни прижимать вправо, а пробелы одинаково видны и на бумаге, и в
+   предпросмотре. Пробелы — всегда обычным шагом и без подчёркивания (иначе отступ был бы подчёркнут). */
+static void PrPad(PrCtx *c, double target)
+{
+    static const PrAttr off = {0, 0, 0, 0, 0, 0, 0};
+    int cnt = (int)(target - c->colF + 0.5);
+    if (cnt <= 0) return;
+    PbAttrs(&c->b, &c->cur, &off);
+    while (cnt-- > 0) { PbPut(&c->b, ' '); c->colF += 1.0; }
+}
+
+static void PrEmit(PrCtx *c, const PCell *cell)
+{
+    unsigned char b;
+    PbAttrs(&c->b, &c->cur, &cell->a);
+    Sm6337_EncodeChar(cell->ch, c->codeTable, &b);
+    PbPut(&c->b, b);
+    c->colF += cell->w;
+}
+
+/* Куда ведёт табуляция из позиции x (колонки от левого поля). Заданные в абзаце стопы — по их типу
+   (левый, по центру, правый: текст после табуляции до следующей табуляции кладётся так, чтобы
+   закончиться/центрироваться на стопе); дальше последнего заданного — каждые 8 колонок. */
+static double TabTarget(const ParaFmt *pf, double x, const PCell *c, int k, int m)
+{
+    int i, best = -1;
+    double stop, segW = 0, target;
+    for (i = 0; i < pf->nTabs; i++)
+        if (pf->tabPos[i] > x + 0.001 && (best < 0 || pf->tabPos[i] < pf->tabPos[best])) best = i;
+    if (best < 0) return (double)((int)(x / 8.0 + 0.001) + 1) * 8.0;
+    stop = pf->tabPos[best];
+    if (stop > pf->width) stop = pf->width; /* стоп правее границы строки — прижимаем к границе */
+    for (i = k + 1; i < m && !c[i].tab && !c[i].brk; i++) segW += c[i].w;
+    if (pf->tabType[best] == 1) target = stop - segW / 2.0;
+    else if (pf->tabType[best] == 2) target = stop - segW;
+    else target = stop;
+    return target < x ? x : target;
+}
+
+static double MeasureLine(const ParaFmt *pf, const PCell *c, int a, int e, int m, double indent)
+{
+    double x = indent; int k;
+    for (k = a; k < e; k++) x = c[k].tab ? TabTarget(pf, x, c, k, m) : x + c[k].w;
+    return x;
+}
+
+/* Раскладывает один абзац: перенос по словам (в программном режиме), отступы, выравнивание
+   (влево / по центру / вправо / по ширине), табуляция со стопами. */
+static void LayoutParagraph(PrCtx *c, const ParaFmt *pf, PCell *cl, int m, BOOL software, BOOL *haveLine)
+{
+    const double wrapW = software ? pf->width : 1e9;
+    int a = 0; BOOL firstLine = TRUE;
+    for (;;) {
+        double indent = firstLine ? pf->first : pf->rest, x;
+        int k, b, e, lastBreak = -1; BOOL forced = FALSE, hasTab = FALSE, lastLine;
+        if (!firstLine) while (a < m && !cl[a].tab && !cl[a].brk && cl[a].ch == ' ') a++; /* пробелы на стыке строк пропускаем */
+        x = indent; b = m;
+        for (k = a; k < m; k++) {
+            if (cl[k].brk) { b = k + 1; forced = TRUE; break; }
+            if (cl[k].tab) { x = TabTarget(pf, x, cl, k, m); hasTab = TRUE; lastBreak = k + 1; continue; }
+            if (cl[k].ch == ' ') { x += cl[k].w; lastBreak = k + 1; continue; } /* пробел у границы не переносит */
+            if (x + cl[k].w > wrapW + 0.001 && k > a) { b = (lastBreak > a) ? lastBreak : k; break; }
+            x += cl[k].w;
+        }
+        lastLine = forced || b >= m;
+        e = forced ? b - 1 : b;                                /* без знака мягкого переноса */
+        while (e > a && !cl[e - 1].tab && cl[e - 1].ch == ' ') e--; /* хвостовые пробелы не в счёт */
+
+        if (*haveLine) { PbPut(&c->b, 0x0D); PbPut(&c->b, 0x0A); c->colF = c->startCol; c->lineCount++; }
+        *haveLine = TRUE;
+        {
+            double cw, start = indent, avail = pf->width - indent;
+            int gaps = 0, extra = 0, gi = 0, base = 0, rem = 0;
+            hasTab = FALSE;
+            for (k = a; k < e; k++) { if (cl[k].tab) hasTab = TRUE; else if (cl[k].ch == ' ') gaps++; }
+            cw = MeasureLine(pf, cl, a, e, m, indent) - indent;
+            if (!hasTab) {
+                if (pf->align == PFA_CENTER) start = indent + (avail > cw ? (avail - cw) / 2.0 : 0);
+                else if (pf->align == PFA_RIGHT) start = indent + (avail > cw ? avail - cw : 0);
+                else if (pf->align == PFA_JUSTIFY && !lastLine && gaps > 0 && avail > cw) {
+                    extra = (int)(avail - cw + 0.5);
+                    base = extra / gaps; rem = extra % gaps;
+                }
+            }
+            PrPad(c, c->startCol + start);
+            for (k = a; k < e; k++) {
+                if (cl[k].tab) { PrPad(c, c->startCol + TabTarget(pf, c->colF - c->startCol, cl, k, m)); continue; }
+                PrEmit(c, &cl[k]);
+                if (extra > 0 && cl[k].ch == ' ') {
+                    int add = base + (gi < rem ? 1 : 0);
+                    gi++;
+                    PrPad(c, c->colF + add); /* добавка в промежутке между словами */
+                }
+            }
+        }
+        if (!forced && b >= m) break; /* абзац закончился (после мягкого переноса в конце — ещё одна пустая строка) */
+        a = b; firstLine = FALSE;
+    }
+}
+
+/* Формат абзаца, с которого начинается позиция cp (RichEdit считает перевод абзаца одним знаком). */
+static void ReadParaFmt(ParaFmt *pf, int cp, int cols, double startCol)
+{
+    PARAFORMAT p; CHARRANGE r; int i; double start, off, right;
+    r.cpMin = r.cpMax = cp;
+    SendMessageA(g_hEdit, EM_EXSETSEL, 0, (LPARAM)&r);
+    ZeroMemory(&p, sizeof(p)); p.cbSize = sizeof(p);
+    SendMessageA(g_hEdit, EM_GETPARAFORMAT, 0, (LPARAM)&p);
+    ZeroMemory(pf, sizeof(*pf));
+    pf->align = ((p.dwMask & PFM_ALIGNMENT) && p.wAlignment >= PFA_LEFT && p.wAlignment <= PFA_JUSTIFY) ? p.wAlignment : PFA_LEFT;
+    start = (p.dwMask & PFM_STARTINDENT) ? p.dxStartIndent / 144.0 : 0; /* 144 твипа = 1 колонка пики (0.1") */
+    off = (p.dwMask & PFM_OFFSET) ? p.dxOffset / 144.0 : 0;
+    right = (p.dwMask & PFM_RIGHTINDENT) ? p.dxRightIndent / 144.0 : 0;
+    pf->right = right > 0 ? right : 0;
+    pf->width = (double)cols - startCol - pf->right;
+    if (pf->width < 1.0) pf->width = 1.0;
+    pf->first = start > 0 ? start : 0;
+    pf->rest = (start + off) > 0 ? (start + off) : 0;
+    if (pf->first > pf->width - 1.0) pf->first = pf->width - 1.0;
+    if (pf->rest > pf->width - 1.0) pf->rest = pf->width - 1.0;
+    if ((p.dwMask & PFM_TABSTOPS) && p.cTabCount > 0) {
+        for (i = 0; i < p.cTabCount && i < MAX_TAB_STOPS; i++) {
+            pf->tabPos[pf->nTabs] = (double)(p.rgxTabs[i] & 0xFFFFFF) / 144.0; /* позиция — младшие 24 бита, тип — биты 24..27 */
+            pf->tabType[pf->nTabs] = (int)((p.rgxTabs[i] >> 24) & 0xF);
+            if (pf->tabType[pf->nTabs] > 2) pf->tabType[pf->nTabs] = 0;       /* десятичный и черта — как левый */
+            pf->nTabs++;
+        }
+    }
+}
+
+/* Собирает поток байт ESC/P для печати: идёт по абзацам RichEdit, у каждого читает формат абзаца
+   (выравнивание, отступы, табы) и формат каждого знака (жирный/подчёркнутый/шаг печати/индексы),
+   раскладывает строки (программный перенос по словам, с учётом веса шага печати) и шлёт знаки с
+   ESC-командами только при смене начертания. Заодно считает итоговое число строк. */
 static unsigned char *BuildPrintJob(const Sm6337Settings *settings, int *outLineCount, DWORD *outLen)
 {
     int len = GetWindowTextLengthA(g_hEdit);
     char *text = (char *)HeapAlloc(GetProcessHeap(), 0, (size_t)len + 1);
+    PCell *cells;
+    PrCtx cx;
+    CHARRANGE savedSel;
+    BOOL software = (settings->pageMode == SM_PAGEMODE_SOFTWARE), haveLine = FALSE, more = TRUE;
+    double startColV;
+    int i = 0, cp = 0;
     if (!text) { *outLen = 0; return NULL; }
     GetWindowTextA(g_hEdit, text, len + 1);
 
-    /* на знак в худшем случае: смена всех атрибутов (до ~19 байт) + перенос + сам знак; табуляция —
-       те же 19 байт один раз и ещё до 7 пробелов с возможным переносом (по 3 байта) — меньше 40 */
-    unsigned char *buf = (unsigned char *)HeapAlloc(GetProcessHeap(), 0, (size_t)len * 40 + 512);
-    if (!buf) { HeapFree(GetProcessHeap(), 0, text); *outLen = 0; return NULL; }
-
-    CHARRANGE savedSel; SendMessageA(g_hEdit, EM_EXGETSEL, 0, (LPARAM)&savedSel);
-
-    DWORD n = 0;
-    buf[n++] = 0x1B; buf[n++] = '@';                              /* ESC @ — сброс устройства */
-    buf[n++] = 0x1B; buf[n++] = 'R'; buf[n++] = (unsigned char)settings->codeTable; /* кодовая таблица */
-    if (settings->unidirectional) { buf[n++] = 0x1B; buf[n++] = 'U'; buf[n++] = 1; } /* качество печати */
-    if (settings->lineSpacing > 0) { buf[n++] = 0x1B; buf[n++] = 'A'; buf[n++] = (unsigned char)settings->lineSpacing; } /* межстрочный интервал */
-    if (settings->leftMargin > 0) { buf[n++] = 0x1B; buf[n++] = 'l'; buf[n++] = (unsigned char)settings->leftMargin; } /* левое поле */
-    if (settings->pageMode == SM_PAGEMODE_PRINTER) {
-        buf[n++] = 0x1B; buf[n++] = 'Q'; buf[n++] = (unsigned char)settings->cols;  /* правая граница строки */
-        buf[n++] = 0x1B; buf[n++] = 'C'; buf[n++] = (unsigned char)(settings->lines > 127 ? 127 : settings->lines); /* длина формата в строках (по справочнику 1..127) */
+    cells = (PCell *)HeapAlloc(GetProcessHeap(), 0, ((size_t)len + 2) * sizeof(PCell));
+    ZeroMemory(&cx, sizeof(cx));
+    cx.b.cap = (DWORD)len * 8 + 4096;
+    cx.b.p = (unsigned char *)HeapAlloc(GetProcessHeap(), 0, cx.b.cap);
+    if (!cells || !cx.b.p) {
+        if (cells) HeapFree(GetProcessHeap(), 0, cells);
+        if (cx.b.p) HeapFree(GetProcessHeap(), 0, cx.b.p);
+        HeapFree(GetProcessHeap(), 0, text); *outLen = 0; return NULL;
     }
 
-    BOOL bold = FALSE, underline = FALSE, elite = FALSE, condensed = FALSE;
-    BOOL doubleStrike = FALSE, expanded = FALSE;
-    int curIndex = 0; /* 0=обычный, 1=верхний индекс, 2=нижний индекс */
+    SendMessageA(g_hEdit, EM_EXGETSEL, 0, (LPARAM)&savedSel);
+
+    PbPut(&cx.b, 0x1B); PbPut(&cx.b, '@');                                              /* ESC @ — сброс устройства */
+    PbPut(&cx.b, 0x1B); PbPut(&cx.b, 'R'); PbPut(&cx.b, (unsigned char)settings->codeTable); /* кодовая таблица */
+    if (settings->unidirectional) { PbPut(&cx.b, 0x1B); PbPut(&cx.b, 'U'); PbPut(&cx.b, 1); } /* качество печати */
+    if (settings->lineSpacing > 0) { PbPut(&cx.b, 0x1B); PbPut(&cx.b, 'A'); PbPut(&cx.b, (unsigned char)settings->lineSpacing); } /* межстрочный интервал */
+    if (settings->leftMargin > 0) { PbPut(&cx.b, 0x1B); PbPut(&cx.b, 'l'); PbPut(&cx.b, (unsigned char)settings->leftMargin); } /* левое поле */
+    if (settings->pageMode == SM_PAGEMODE_PRINTER) {
+        PbPut(&cx.b, 0x1B); PbPut(&cx.b, 'Q'); PbPut(&cx.b, (unsigned char)settings->cols);  /* правая граница строки */
+        PbPut(&cx.b, 0x1B); PbPut(&cx.b, 'C'); PbPut(&cx.b, (unsigned char)(settings->lines > 127 ? 127 : settings->lines)); /* длина формата в строках (по справочнику 1..127) */
+    }
+
     /* левое поле (ESC l) — это отступ от края бумаги: строка начинается не с колонки 0, а с
        колонки leftMargin, и правая граница cols отсчитывается от края бумаги, поэтому текста
        в строке помещается на leftMargin знаков меньше */
-    double startColV = (double)settings->leftMargin;
+    startColV = (double)settings->leftMargin;
     if (startColV >= (double)settings->cols) startColV = settings->cols > 1 ? (double)(settings->cols - 1) : 0.0; /* поле не шире строки */
-    const double startCol = startColV;
-    double colF = startCol; int lineCount = 1;
-    BOOL software = (settings->pageMode == SM_PAGEMODE_SOFTWARE);
+    cx.startCol = startColV; cx.colF = startColV; cx.lineCount = 1; cx.codeTable = settings->codeTable;
+
     /* Имя файла по центру первой строки листа (параметр в «Настройке печати»), ниже — пустая строка.
        Центровка по ширине строки за вычетом левого поля, в колонках 10 знаков на дюйм. */
     if (settings->headerText && settings->headerText[0]) {
-        int avail = settings->cols - (int)startCol;
+        int avail = settings->cols - (int)cx.startCol;
         int hl = (int)strlen(settings->headerText);
         int pad, k;
         if (avail < 1) avail = 1;
         if (hl > avail) hl = avail;
         pad = (avail - hl) / 2;
-        for (k = 0; k < pad; k++) buf[n++] = ' ';
+        for (k = 0; k < pad; k++) PbPut(&cx.b, ' ');
         for (k = 0; k < hl; k++) {
             unsigned char hb, hr = (unsigned char)settings->headerText[k];
             if (hr < 32) hr = ' ';
             Sm6337_EncodeChar(hr, settings->codeTable, &hb);
-            buf[n++] = hb;
+            PbPut(&cx.b, hb);
         }
-        buf[n++] = 0x0D; buf[n++] = 0x0A; buf[n++] = 0x0D; buf[n++] = 0x0A;
-        lineCount += 2;
+        PbPut(&cx.b, 0x0D); PbPut(&cx.b, 0x0A); PbPut(&cx.b, 0x0D); PbPut(&cx.b, 0x0A);
+        cx.lineCount += 2;
     }
 
-    for (int i = 0; i < len; i++) {
-        unsigned char raw = (unsigned char)text[i];
-        if (raw == '\r') {
-            if (i + 1 < len && text[i + 1] == '\n') continue; /* CR LF — конец строки разберём на LF */
-            raw = '\n';                                        /* одиночный CR (RichEdit 3.0+) — тоже конец строки */
+    while (more) {
+        ParaFmt pf;
+        int m = 0;
+        ReadParaFmt(&pf, cp, settings->cols, cx.startCol);
+        for (;;) {
+            unsigned char raw;
+            if (i >= len) { more = FALSE; break; }
+            raw = (unsigned char)text[i];
+            if (raw == '\r') { i++; if (i < len && text[i] == '\n') i++; cp++; break; } /* конец абзаца (CR LF — один знак) */
+            if (raw == '\n') { i++; cp++; break; }                                    /* одиночный LF — тоже конец абзаца */
+            {
+                PCell *ce = &cells[m];
+                ZeroMemory(ce, sizeof(*ce));
+                /* Управляющие коды из документа в принтер не пускаем: ESC, SI и прочие из вставленного
+                   текста превратились бы в команды принтеру. Табуляция и мягкий перенос — отдельные знаки
+                   (расстояние до стопа считается при раскладке); неразрывный пробел печатается пробелом. */
+                if (raw == '\t') { ce->tab = TRUE; m++; }
+                else if (raw == 0x0B) { ce->brk = TRUE; m++; }
+                else if (raw >= 32 && raw != 127) {
+                    CHARRANGE cr; CHARFORMAT2A cf; BOOL el, co, ex; double cpi;
+                    cr.cpMin = cp; cr.cpMax = cp + 1;
+                    SendMessageA(g_hEdit, EM_EXSETSEL, 0, (LPARAM)&cr);
+                    ZeroMemory(&cf, sizeof(cf)); cf.cbSize = sizeof(cf);
+                    SendMessageA(g_hEdit, EM_GETCHARFORMAT, SCF_SELECTION, (LPARAM)&cf);
+                    cpi = PitchCpiFromFormat(cf.szFaceName, cf.yHeight, &el, &co, &ex);
+                    ce->ch = (raw == 0xA0) ? ' ' : raw;
+                    ce->a.bold = (cf.dwEffects & CFE_BOLD) ? 1 : 0;
+                    ce->a.under = (cf.dwEffects & CFE_UNDERLINE) ? 1 : 0;
+                    ce->a.dstrike = (cf.dwEffects & CFE_STRIKEOUT) ? 1 : 0;
+                    ce->a.idx = (cf.dwEffects & CFE_SUPERSCRIPT) ? 1 : (cf.dwEffects & CFE_SUBSCRIPT) ? 2 : 0;
+                    ce->a.elite = el ? 1 : 0; ce->a.cond = co ? 1 : 0; ce->a.expd = ex ? 1 : 0;
+                    ce->w = 10.0 / cpi; /* вес знака в «пика-эквиваленте» — cols откалиброван для 10 cpi */
+                    m++;
+                }
+                i++; cp++;
+            }
         }
-
-        if (raw == '\n') {
-            buf[n++] = 0x0D; buf[n++] = 0x0A;
-            colF = startCol; lineCount++;
-            continue;
-        }
-
-        /* Управляющие коды из документа в принтер не пускаем: ESC, SI и прочие из вставленного текста
-           превратились бы в команды принтеру. Табуляция — до ближайшей кратной 8 колонки пробелами (принтер
-           сам сдвигал бы головку по своим табостопам, и перенос и предпросмотр считали бы неверно). */
-        int repeat = 1;
-        double tabStop = 0;
-        if (raw == '\t') {
-            /* стопы через 8 колонок от левого поля (на экране так же — SetTabStops); пробелы добиваем
-               до стопа по реальной ширине (в расширенном шаге пробел — 2 колонки) */
-            tabStop = startCol + (double)((int)((colF - startCol + 0.001) / 8.0) + 1) * 8.0;
-            repeat = 32; raw = ' ';
-        }
-        else if (raw < 32 || raw == 127) continue;
-        else if (raw == 0xA0) raw = ' '; /* неразрывный пробел */
-
-        CHARRANGE cr; cr.cpMin = i; cr.cpMax = i + 1;
-        SendMessageA(g_hEdit, EM_EXSETSEL, 0, (LPARAM)&cr);
-        CHARFORMAT2A cf; ZeroMemory(&cf, sizeof(cf)); cf.cbSize = sizeof(cf);
-        SendMessageA(g_hEdit, EM_GETCHARFORMAT, SCF_SELECTION, (LPARAM)&cf);
-        BOOL wantBold = (cf.dwEffects & CFE_BOLD) ? TRUE : FALSE;
-        BOOL wantUnderline = (cf.dwEffects & CFE_UNDERLINE) ? TRUE : FALSE;
-        BOOL wantDoubleStrike = (cf.dwEffects & CFE_STRIKEOUT) ? TRUE : FALSE;
-        int wantIndex = (cf.dwEffects & CFE_SUPERSCRIPT) ? 1 : (cf.dwEffects & CFE_SUBSCRIPT) ? 2 : 0;
-        BOOL wantElite, wantCondensed, wantExpanded;
-        double cpi = PitchCpiFromFormat(cf.szFaceName, cf.yHeight, &wantElite, &wantCondensed, &wantExpanded);
-
-        for (int rep = 0; rep < repeat; rep++) {
-        if (tabStop > 0 && colF >= tabStop - 0.001) break; /* дошли до стопа */
-        if (software && colF + 10.0 / cpi > (double)settings->cols + 0.001) { /* знак целиком должен влезать (расширенный — 2 колонки) */
-            if (tabStop > 0) break; /* табуляция у края строки не переносится на следующую */
-            buf[n++] = 0x0D; buf[n++] = 0x0A;
-            colF = startCol; lineCount++;
-        }
-
-        if (wantElite != elite) {
-            buf[n++] = 0x1B; buf[n++] = wantElite ? 'M' : 'P';
-            elite = wantElite;
-        }
-        if (wantCondensed != condensed) {
-            buf[n++] = wantCondensed ? 0x0F : 0x12; /* SI вкл / DC2 выкл */
-            condensed = wantCondensed;
-        }
-        if (wantBold != bold) {
-            buf[n++] = 0x1B; buf[n++] = wantBold ? 'E' : 'F';
-            bold = wantBold;
-        }
-        if (wantUnderline != underline) {
-            buf[n++] = 0x1B; buf[n++] = '-'; buf[n++] = wantUnderline ? 1 : 0;
-            underline = wantUnderline;
-        }
-        if (wantDoubleStrike != doubleStrike) {
-            buf[n++] = 0x1B; buf[n++] = wantDoubleStrike ? 'G' : 'H';
-            doubleStrike = wantDoubleStrike;
-        }
-        if (wantExpanded != expanded) {
-            buf[n++] = 0x1B; buf[n++] = 'W'; buf[n++] = wantExpanded ? 1 : 0;
-            expanded = wantExpanded;
-        }
-        if (wantIndex != curIndex) {
-            if (wantIndex == 0) { buf[n++] = 0x1B; buf[n++] = 'T'; }
-            else { buf[n++] = 0x1B; buf[n++] = 'S'; buf[n++] = (wantIndex == 1) ? 0 : 1; }
-            curIndex = wantIndex;
-        }
-
-        unsigned char b;
-        Sm6337_EncodeChar(raw, settings->codeTable, &b);
-        buf[n++] = b;
-        colF += 10.0 / cpi; /* вес символа в "пика-эквиваленте" — g_cols откалиброван для 10cpi */
-        } /* rep: табуляция печатается несколькими пробелами */
+        LayoutParagraph(&cx, &pf, cells, m, software, &haveLine);
     }
 
-    if (bold) { buf[n++] = 0x1B; buf[n++] = 'F'; }             /* вернуть шрифт в обычное состояние */
-    if (underline) { buf[n++] = 0x1B; buf[n++] = '-'; buf[n++] = 0; }
-    if (doubleStrike) { buf[n++] = 0x1B; buf[n++] = 'H'; }
-    if (expanded) { buf[n++] = 0x1B; buf[n++] = 'W'; buf[n++] = 0; }
-    if (curIndex != 0) { buf[n++] = 0x1B; buf[n++] = 'T'; }
-    if (condensed) { buf[n++] = 0x12; }
-    if (elite) { buf[n++] = 0x1B; buf[n++] = 'P'; }
+    {   /* вернуть начертание в исходное состояние */
+        static const PrAttr off = {0, 0, 0, 0, 0, 0, 0};
+        PbAttrs(&cx.b, &cx.cur, &off);
+    }
 
     if (settings->avoidFormFeed) {
         /* НЕ шлём ПФ (0x0C) — именно это уводит принтер в АВР на листах A4.
            Вместо этого продвигаем бумагу нужным числом пустых строк. */
-        int feedLines = settings->feedLinesAfterPrint;
+        int feedLines = settings->feedLinesAfterPrint, fi;
         if (feedLines < 0) feedLines = 0;
         if (feedLines > 9) feedLines = 9;
         /* принтер печатает строку только по CR/LF: если пустых строк 0, а документ закончился не
            переводом строки, последняя строка осталась бы в буфере принтера непропечатанной */
-        if (feedLines == 0 && n >= 2 && !(buf[n - 2] == 0x0D && buf[n - 1] == 0x0A)) { buf[n++] = 0x0D; buf[n++] = 0x0A; }
-        for (int i = 0; i < feedLines; i++) { buf[n++] = 0x0D; buf[n++] = 0x0A; }
+        if (feedLines == 0 && cx.b.n >= 2 && !(cx.b.p[cx.b.n - 2] == 0x0D && cx.b.p[cx.b.n - 1] == 0x0A)) { PbPut(&cx.b, 0x0D); PbPut(&cx.b, 0x0A); }
+        for (fi = 0; fi < feedLines; fi++) { PbPut(&cx.b, 0x0D); PbPut(&cx.b, 0x0A); }
     } else {
-        buf[n++] = 0x0C; /* ПФ — классический форм-фид */
+        PbPut(&cx.b, 0x0C); /* ПФ — классический форм-фид */
     }
 
     SendMessageA(g_hEdit, EM_EXSETSEL, 0, (LPARAM)&savedSel); /* вернуть выделение как было */
 
     HeapFree(GetProcessHeap(), 0, text);
-    *outLineCount = lineCount;
-    *outLen = n;
-    return buf;
+    HeapFree(GetProcessHeap(), 0, cells);
+    if (cx.b.fail) { HeapFree(GetProcessHeap(), 0, cx.b.p); *outLen = 0; return NULL; }
+    *outLineCount = cx.lineCount;
+    *outLen = cx.b.n;
+    return cx.b.p;
 }
 
 /* Колбэки для EM_STREAMOUT/EM_STREAMIN — RichEdit сам конвертит форматирование
@@ -1117,21 +1255,38 @@ static BOOL IsTextPath(const char *path)
 
 /* «Имя файла [*] — SM6337 Edit»; «*» — есть несохранённые изменения. */
 /* Стопы табуляции на экране — через 8 колонок пика (0,8 дюйма = 1152 твипа), как при печати (BuildPrintJob).
-   Дефолт RichEdit — полдюйма, и отступы на экране не совпали бы с бумагой. Применяем ко всему документу. */
+   Дефолт RichEdit — полдюйма, и отступы на экране не совпали бы с бумагой. Ставим только абзацам без
+   собственных стопов: у документа со своими (в том числе правым и по центру) они остаются как есть. */
 static void SetTabStops(void)
 {
-    PARAFORMAT pf; CHARRANGE old, all;
-    int i;
-    ZeroMemory(&pf, sizeof(pf));
-    pf.cbSize = sizeof(pf);
-    pf.dwMask = PFM_TABSTOPS;
-    pf.cTabCount = MAX_TAB_STOPS;
-    for (i = 0; i < MAX_TAB_STOPS; i++) pf.rgxTabs[i] = 1152 * (i + 1);
+    int len = GetWindowTextLengthA(g_hEdit);
+    char *text = (char *)HeapAlloc(GetProcessHeap(), 0, (size_t)len + 1);
+    CHARRANGE old, r;
+    int i = 0, cp = 0, k;
+    if (!text) return;
+    GetWindowTextA(g_hEdit, text, len + 1);
     SendMessageA(g_hEdit, EM_EXGETSEL, 0, (LPARAM)&old);
-    all.cpMin = 0; all.cpMax = -1;
-    SendMessageA(g_hEdit, EM_EXSETSEL, 0, (LPARAM)&all);
-    SendMessageA(g_hEdit, EM_SETPARAFORMAT, 0, (LPARAM)&pf);
+    for (;;) { /* по началу каждого абзаца; перевод абзаца RichEdit считает одним знаком */
+        PARAFORMAT pf;
+        r.cpMin = r.cpMax = cp;
+        SendMessageA(g_hEdit, EM_EXSETSEL, 0, (LPARAM)&r);
+        ZeroMemory(&pf, sizeof(pf)); pf.cbSize = sizeof(pf);
+        SendMessageA(g_hEdit, EM_GETPARAFORMAT, 0, (LPARAM)&pf);
+        if (!(pf.dwMask & PFM_TABSTOPS) || pf.cTabCount == 0) {
+            ZeroMemory(&pf, sizeof(pf));
+            pf.cbSize = sizeof(pf);
+            pf.dwMask = PFM_TABSTOPS;
+            pf.cTabCount = MAX_TAB_STOPS;
+            for (k = 0; k < MAX_TAB_STOPS; k++) pf.rgxTabs[k] = 1152 * (k + 1);
+            SendMessageA(g_hEdit, EM_SETPARAFORMAT, 0, (LPARAM)&pf);
+        }
+        while (i < len && text[i] != '\r' && text[i] != '\n') { i++; cp++; }
+        if (i >= len) break;
+        if (text[i] == '\r' && i + 1 < len && text[i + 1] == '\n') i++;
+        i++; cp++;
+    }
     SendMessageA(g_hEdit, EM_EXSETSEL, 0, (LPARAM)&old);
+    HeapFree(GetProcessHeap(), 0, text);
 }
 
 static void SetDocTitle(HWND hWnd)
