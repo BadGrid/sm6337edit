@@ -746,7 +746,13 @@ static unsigned char *BuildPrintJob(const Sm6337Settings *settings, int *outLine
            превратились бы в команды принтеру. Табуляция — до ближайшей кратной 8 колонки пробелами (принтер
            сам сдвигал бы головку по своим табостопам, и перенос и предпросмотр считали бы неверно). */
         int repeat = 1;
-        if (raw == '\t') { repeat = 8 - ((int)(colF + 0.001) % 8); raw = ' '; }
+        double tabStop = 0;
+        if (raw == '\t') {
+            /* стопы через 8 колонок от левого поля (на экране так же — SetTabStops); пробелы добиваем
+               до стопа по реальной ширине (в расширенном шаге пробел — 2 колонки) */
+            tabStop = startCol + (double)((int)((colF - startCol + 0.001) / 8.0) + 1) * 8.0;
+            repeat = 32; raw = ' ';
+        }
         else if (raw < 32 || raw == 127) continue;
         else if (raw == 0xA0) raw = ' '; /* неразрывный пробел */
 
@@ -762,7 +768,9 @@ static unsigned char *BuildPrintJob(const Sm6337Settings *settings, int *outLine
         double cpi = PitchCpiFromFormat(cf.szFaceName, cf.yHeight, &wantElite, &wantCondensed, &wantExpanded);
 
         for (int rep = 0; rep < repeat; rep++) {
+        if (tabStop > 0 && colF >= tabStop - 0.001) break; /* дошли до стопа */
         if (software && colF + 10.0 / cpi > (double)settings->cols + 0.001) { /* знак целиком должен влезать (расширенный — 2 колонки) */
+            if (tabStop > 0) break; /* табуляция у края строки не переносится на следующую */
             buf[n++] = 0x0D; buf[n++] = 0x0A;
             colF = startCol; lineCount++;
         }
@@ -1108,6 +1116,24 @@ static BOOL IsTextPath(const char *path)
 }
 
 /* «Имя файла [*] — SM6337 Edit»; «*» — есть несохранённые изменения. */
+/* Стопы табуляции на экране — через 8 колонок пика (0,8 дюйма = 1152 твипа), как при печати (BuildPrintJob).
+   Дефолт RichEdit — полдюйма, и отступы на экране не совпали бы с бумагой. Применяем ко всему документу. */
+static void SetTabStops(void)
+{
+    PARAFORMAT pf; CHARRANGE old, all;
+    int i;
+    ZeroMemory(&pf, sizeof(pf));
+    pf.cbSize = sizeof(pf);
+    pf.dwMask = PFM_TABSTOPS;
+    pf.cTabCount = MAX_TAB_STOPS;
+    for (i = 0; i < MAX_TAB_STOPS; i++) pf.rgxTabs[i] = 1152 * (i + 1);
+    SendMessageA(g_hEdit, EM_EXGETSEL, 0, (LPARAM)&old);
+    all.cpMin = 0; all.cpMax = -1;
+    SendMessageA(g_hEdit, EM_EXSETSEL, 0, (LPARAM)&all);
+    SendMessageA(g_hEdit, EM_SETPARAFORMAT, 0, (LPARAM)&pf);
+    SendMessageA(g_hEdit, EM_EXSETSEL, 0, (LPARAM)&old);
+}
+
 static void SetDocTitle(HWND hWnd)
 {
     static char last[MAX_PATH + 64] = "";
@@ -1167,6 +1193,7 @@ static BOOL OpenDocumentPath(HWND hWnd, const char *path)
         return FALSE;
     }
     strcpy(g_curFile, path);
+    SetTabStops();
     SendMessageA(g_hEdit, EM_SETMODIFY, FALSE, 0);
     SendMessageA(g_hEdit, EM_EMPTYUNDOBUFFER, 0, 0);
     SetDocTitle(hWnd);
@@ -1350,6 +1377,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
            для языка клавиатуры: поставили «расширенный» шрифт, набрали букву другой раскладки —
            и шрифт сбросился на обычный. Шаг печати и ширина знака — наши, чужой автоподбор отключаем. */
         SendMessageA(g_hEdit, EM_SETLANGOPTIONS, 0, 0);
+        SetTabStops();
 
         g_hFont = CreateFontA(
             -14, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
@@ -1445,6 +1473,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
         case IDM_FILE_NEW:
             if (!AskSaveChanges(hWnd)) return 0;
             SetWindowTextA(g_hEdit, "");
+            SetTabStops();
             g_curFile[0] = 0;
             SendMessageA(g_hEdit, EM_SETMODIFY, FALSE, 0);
             SendMessageA(g_hEdit, EM_EMPTYUNDOBUFFER, 0, 0);
