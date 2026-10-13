@@ -41,7 +41,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.REPO_ADMIN_TOKEN }}
         run: |
-          topics="sm6337 sm-6337 cm6337 dot-matrix-printer escp esc-p lpt parallel-port windows-98 win98 win9x win32 winapi c richedit text-editor wordpad retro-computing printing russian"
+          topics="sm6337 sm-6337 cm6337 cm-6337 dot-matrix-printer escp esc-p windows-98 retrocomputing soviet-computer epson win9x win32 winapi richedit wordpad text-editor parallel-port lpt printing"
           args=()
           for t in $topics; do args+=(-f "names[]=$t"); done
           gh api -X PUT "repos/$GITHUB_REPOSITORY/topics" -H "Accept: application/vnd.github+json" "${args[@]}" --jq '.names | join(" ")'
