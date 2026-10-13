@@ -11,15 +11,37 @@ jobs:
   about:
     runs-on: ubuntu-latest
     steps:
-      - name: Описание и темы
+      - name: Проверка секрета
         env:
           GH_TOKEN: ${{ secrets.REPO_ADMIN_TOKEN }}
         run: |
           if [ -z "$GH_TOKEN" ]; then echo "Нет секрета REPO_ADMIN_TOKEN (Settings → Secrets and variables → Actions)"; exit 1; fi
-          topics="sm6337 sm-6337 cm6337 dot-matrix-printer escp esc-p lpt parallel-port windows-98 win98 win9x win32 winapi c richedit text-editor wordpad retro-computing printing russian"
-          args=()
-          for t in $topics; do args+=(-f "names[]=$t"); done
+
+      - name: Описание
+        env:
+          GH_TOKEN: ${{ secrets.REPO_ADMIN_TOKEN }}
+        run: |
           gh api -X PATCH "repos/$GITHUB_REPOSITORY" \
             -f description="Редактор для Windows 98 SE с прямой печатью на принтер СМ6337 через LPT1 — без драйвера, сырым ESC/P. Шаг 10/12/17, предпросмотр, RTF. / WordPad-like editor for Win98 that prints raw ESC/P to the SM6337 dot-matrix printer." \
             --jq '.description'
+
+      # Тест: принимает ли GitHub кириллицу в топиках. Ставит кириллические темы вместо текущих,
+      # печатает ответ, а следующий шаг в любом случае возвращает основной список.
+      - name: Тест кириллицы в топиках
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.REPO_ADMIN_TOKEN }}
+        run: |
+          for t in "см6337" "см-6337" "матричный-принтер"; do
+            echo "== $t"
+            gh api -X PUT "repos/$GITHUB_REPOSITORY/topics" -H "Accept: application/vnd.github+json" -f "names[]=$t" --jq '"ПРИНЯТО: " + (.names | join(" "))' || echo "ОТКЛОНЕНО: $t"
+          done
+
+      - name: Темы (основной список, 20)
+        env:
+          GH_TOKEN: ${{ secrets.REPO_ADMIN_TOKEN }}
+        run: |
+          topics="sm6337 sm-6337 cm6337 dot-matrix-printer escp esc-p lpt parallel-port windows-98 win98 win9x win32 winapi c richedit text-editor wordpad retro-computing printing russian"
+          args=()
+          for t in $topics; do args+=(-f "names[]=$t"); done
           gh api -X PUT "repos/$GITHUB_REPOSITORY/topics" -H "Accept: application/vnd.github+json" "${args[@]}" --jq '.names | join(" ")'
