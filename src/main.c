@@ -1502,6 +1502,101 @@ static const char *ToolbarTip(UINT id)
     return NULL;
 }
 
+/* ---- Печать по листам --------------------------------------------------------------------------
+   На листах A4 аппаратный форм-фид уводит принтер в АВР, поэтому многостраничный документ, отправленный
+   одним куском, дошёл бы до края листа и продолжил печатать по валику. Здесь задание режется на листы
+   по числу строк на лист; после каждого листа программа останавливается, чтобы вставить следующий. */
+static unsigned char *g_pjob;
+static DWORD g_pjobLen, g_ppos;
+static int g_ppageLines, g_ppage, g_ppages;
+
+/* Сколько байт параметров у ESC-команды: CR/LF среди них нельзя считать концом строки (например,
+   левое поле 13 знаков — это байт 0x0D после ESC l). */
+static int EscParamLen(unsigned char c)
+{
+    switch (c) {
+    case 'R': case 'U': case 'A': case 'l': case 'Q': case 'C': case '-': case 'W': case 'S': return 1;
+    default: return 0;
+    }
+}
+
+/* Смещение конца листа из pageLines строк (строка кончается CR LF), считая от from. */
+static DWORD PageEnd(const unsigned char *b, DWORD len, DWORD from, int pageLines)
+{
+    int lines = 0; DWORD i = from;
+    while (i < len) {
+        if (b[i] == 0x1B) { i += 2 + (i + 1 < len ? EscParamLen(b[i + 1]) : 0); continue; }
+        if (b[i] == 0x0D && i + 1 < len && b[i + 1] == 0x0A) {
+            i += 2;
+            if (++lines >= pageLines) return i < len ? i : len;
+            continue;
+        }
+        i++;
+    }
+    return len;
+}
+
+/* Остаток задания — только переводы строк и сброс начертаний (хвост «пустые строки после печати»)? */
+static BOOL OnlyBlank(const unsigned char *b, DWORD from, DWORD len)
+{
+    DWORD i = from;
+    while (i < len) {
+        if (b[i] == 0x1B) { i += 2 + (i + 1 < len ? EscParamLen(b[i + 1]) : 0); continue; }
+        if (b[i] == 0x0D || b[i] == 0x0A || b[i] == 0x0C || b[i] == 0x12) { i++; continue; }
+        return FALSE;
+    }
+    return TRUE;
+}
+
+static void PagedStop(void)
+{
+    if (g_pjob) { HeapFree(GetProcessHeap(), 0, g_pjob); g_pjob = NULL; }
+}
+
+static DWORD PagedChunkEnd(DWORD from)
+{
+    DWORD end = PageEnd(g_pjob, g_pjobLen, from, g_ppageLines);
+    if (OnlyBlank(g_pjob, end, g_pjobLen)) end = g_pjobLen; /* пустой «лист» из одних хвостовых строк не нужен */
+    return end;
+}
+
+static int PagedCount(void)
+{
+    DWORD pos = 0; int n = 0;
+    while (pos < g_pjobLen) { pos = PagedChunkEnd(pos); n++; }
+    return n;
+}
+
+static BOOL PagedSendNext(HWND hWnd)
+{
+    DWORD end = PagedChunkEnd(g_ppos);
+    g_ppage++;
+    if (!Sm6337_PrintAsync(hWnd, g_pjob + g_ppos, end - g_ppos)) {
+        MessageBoxA(hWnd, "Не удалось запустить печать листа (занято или не хватило памяти).", "Ошибка печати", MB_OK | MB_ICONERROR);
+        PagedStop();
+        return FALSE;
+    }
+    g_ppos = end;
+    SetDocTitle(hWnd);
+    return TRUE;
+}
+
+/* Лист ушёл на принтер: спросить про следующий. Вызывается из SM_WM_PRINTDONE. */
+static void PagedAfterSheet(HWND hWnd, BOOL ok)
+{
+    if (!g_pjob) return;
+    if (!ok || g_ppos >= g_pjobLen) { PagedStop(); return; }
+    {
+        char msg[220], a[12], b[12];
+        UIntToStrA((unsigned long)g_ppage, a);
+        UIntToStrA((unsigned long)g_ppages, b);
+        strcpy(msg, "Лист "); strcat(msg, a); strcat(msg, " из "); strcat(msg, b);
+        strcat(msg, " отправлен на принтер. Дождитесь, пока он допечатает, смените лист и нажмите ОК.\nОтмена — не печатать остальное.");
+        if (MessageBoxA(hWnd, msg, "SM6337 Edit — следующий лист", MB_OKCANCEL | MB_ICONINFORMATION) == IDOK) PagedSendNext(hWnd);
+        else PagedStop();
+    }
+}
+
 static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     if (g_msgFind && msg == g_msgFind) {
@@ -1638,6 +1733,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
         if (!wParam && lParam && ((const char *)lParam)[0])
             MessageBoxA(hWnd, (const char *)lParam, "Ошибка печати", MB_OK | MB_ICONERROR);
         if (lParam) HeapFree(GetProcessHeap(), 0, (LPVOID)lParam);
+        PagedAfterSheet(hWnd, wParam ? TRUE : FALSE);
         return 0;
     case WM_CLOSE:
         if (Sm6337_PrintBusy() &&
@@ -1963,19 +2059,36 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
                 pageLines = (int)((double)g_lines * 12.0 / (double)g_lineSpacing + 0.001); /* 1/6" = 12 шагов по 0,353 мм */
                 if (pageLines < 1) pageLines = 1;
             }
+            BOOL paged = FALSE;
             if (g_pageMode == SM_PAGEMODE_SOFTWARE && lineCount > pageLines) {
-                char msg[200], nStr[12], lStr[12];
+                char msg[420], nStr[12], lStr[12];
                 UIntToStrA((unsigned long)lineCount, nStr);
                 UIntToStrA((unsigned long)pageLines, lStr);
                 strcpy(msg, "После переноса получится ");
                 strcat(msg, nStr);
                 strcat(msg, " строк, на страницу помещается ");
                 strcat(msg, lStr);
-                strcat(msg, ".\nВсё равно печатать?");
-                if (MessageBoxA(hWnd, msg, "SM6337 Edit", MB_YESNO | MB_ICONWARNING) != IDYES) {
-                    HeapFree(GetProcessHeap(), 0, job);
-                    return 0;
+                strcat(msg, ".\n\nДа — печатать по листам: после каждого листа программа остановится, чтобы вы сменили лист.\nНет — печатать подряд, без остановок.\nОтмена — не печатать.");
+                {
+                    int r = MessageBoxA(hWnd, msg, "SM6337 Edit", MB_YESNOCANCEL | MB_ICONQUESTION);
+                    if (r == IDCANCEL) {
+                        HeapFree(GetProcessHeap(), 0, job);
+                        return 0;
+                    }
+                    paged = (r == IDYES);
                 }
+            }
+
+            if (g_pjob) {
+                MessageBoxA(hWnd, "Идёт печать по листам. Закончите её или отмените, потом запускайте новую.", "SM6337 Edit", MB_OK | MB_ICONINFORMATION);
+                HeapFree(GetProcessHeap(), 0, job);
+                return 0;
+            }
+            if (paged && !Sm6337_PrintBusy()) {
+                g_pjob = job; g_pjobLen = jobLen; g_ppos = 0; g_ppageLines = pageLines; g_ppage = 0;
+                g_ppages = PagedCount();
+                PagedSendNext(hWnd); /* владение заданием перешло к печати по листам */
+                return 0;
             }
 
             /* печать идёт в отдельном потоке: окно не виснет, даже если принтер выключен */
