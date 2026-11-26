@@ -42,6 +42,9 @@ text comes out crisp, as if printed from the printer's own ROM font.
 - "Do not send hardware form feed" option — on A4 sheets a plain form feed sends the printer into
   an out-of-paper fault (АВР), so by default a number of empty lines is sent instead
 - Unidirectional printing (ESC U) — more precise, but slower
+- A document longer than one sheet can be printed sheet by sheet: after each sheet the program pauses so you
+  can change the sheet (on A4 sheets a hardware form feed sends the printer into an out-of-paper fault, so
+  printing straight through is not an option). "File -> Print Selection" prints only the selected fragment
 - Printing runs in a background thread: the window does not freeze even if the printer is off; the title shows
   "printing", an error arrives as a message, and a second job cannot start while one is printing
 - Printing the file name centered on the first line of the sheet - a switch in the print settings
