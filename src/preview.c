@@ -517,9 +517,14 @@ static LRESULT CALLBACK PvProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam
         switch (LOWORD(wParam)) {
         case PV_CMD_PRINT:
             if (g_job) {
-                char err[256] = "";
-                if (!Sm6337_PrintRaw(g_job, g_jobLen, err, 256))
-                    MessageBoxA(hWnd, err, "Ошибка печати", MB_OK | MB_ICONERROR);
+                /* в отдельном потоке; об окончании и ошибке узнаёт главное окно (предпросмотр можно закрыть) */
+                HWND own = GetWindow(hWnd, GW_OWNER);
+                if (Sm6337_PrintBusy())
+                    MessageBoxA(hWnd, "Предыдущее задание ещё печатается. Дождитесь окончания.", "SM6337 Edit", MB_OK | MB_ICONINFORMATION);
+                else if (!Sm6337_PrintAsync(own ? own : hWnd, g_job, g_jobLen))
+                    MessageBoxA(hWnd, "Не удалось запустить печать (не хватило памяти).", "Ошибка печати", MB_OK | MB_ICONERROR);
+                else if (own)
+                    SendMessageA(own, SM_WM_PRINTSTART, 0, 0);
             }
             break;
         case PV_CMD_CLOSE: DestroyWindow(hWnd); break;

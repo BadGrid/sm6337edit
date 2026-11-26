@@ -94,6 +94,54 @@ BOOL Sm6337_FileBesideExe(const char *name, char *outPath, int outSize)
     return GetFileAttributesA(outPath) != 0xFFFFFFFF;
 }
 
+typedef struct { HWND hWnd; unsigned char *bytes; DWORD len; } PrintJobCtx;
+static volatile LONG g_printBusy = 0;
+
+static DWORD WINAPI PrintThread(LPVOID param)
+{
+    PrintJobCtx *c = (PrintJobCtx *)param;
+    char *err = (char *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, 256);
+    HWND hWnd = c->hWnd;
+    BOOL ok = FALSE;
+    if (err) ok = Sm6337_PrintRaw(c->bytes, c->len, err, 256);
+    HeapFree(GetProcessHeap(), 0, c->bytes);
+    HeapFree(GetProcessHeap(), 0, c);
+    InterlockedExchange((LONG *)&g_printBusy, 0);
+    if (!PostMessageA(hWnd, SM_WM_PRINTDONE, (WPARAM)ok, (LPARAM)err) && err)
+        HeapFree(GetProcessHeap(), 0, err); /* окно уже закрыто — сообщение некому принять */
+    return 0;
+}
+
+BOOL Sm6337_PrintBusy(void)
+{
+    return g_printBusy != 0;
+}
+
+BOOL Sm6337_PrintAsync(HWND hNotify, const unsigned char *bytes, DWORD len)
+{
+    PrintJobCtx *c;
+    HANDLE th; DWORD tid;
+    if (InterlockedExchange((LONG *)&g_printBusy, 1) != 0) return FALSE;
+    c = (PrintJobCtx *)HeapAlloc(GetProcessHeap(), 0, sizeof(*c));
+    if (c) c->bytes = (unsigned char *)HeapAlloc(GetProcessHeap(), 0, len ? len : 1);
+    if (!c || !c->bytes) {
+        if (c) HeapFree(GetProcessHeap(), 0, c);
+        InterlockedExchange((LONG *)&g_printBusy, 0);
+        return FALSE;
+    }
+    memcpy(c->bytes, bytes, len);
+    c->len = len; c->hWnd = hNotify;
+    th = CreateThread(NULL, 0, PrintThread, c, 0, &tid);
+    if (!th) {
+        HeapFree(GetProcessHeap(), 0, c->bytes);
+        HeapFree(GetProcessHeap(), 0, c);
+        InterlockedExchange((LONG *)&g_printBusy, 0);
+        return FALSE;
+    }
+    CloseHandle(th);
+    return TRUE;
+}
+
 HBITMAP Sm6337_LoadToolbarStrip(void)
 {
     char path[MAX_PATH];

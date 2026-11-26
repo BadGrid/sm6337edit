@@ -40,6 +40,16 @@ BOOL Sm6337_EncodeChar(unsigned char cp1251Byte, int codeTable, unsigned char *o
    Возвращает TRUE при успехе, иначе errMsg заполняется описанием ошибки. */
 BOOL Sm6337_PrintRaw(const unsigned char *bytes, DWORD len, char *errMsg, int errMsgSize);
 
+/* То же, но в отдельном потоке: окно остаётся живым, пока принтер принимает данные (на Win98 запись в
+   LPT1 блокируется, если принтер выключен или не готов). Байты копируются, вызывающий свой буфер
+   освобождает сам. По окончании окну hNotify приходит SM_WM_PRINTDONE: wParam — TRUE/FALSE, lParam —
+   строка ошибки в куче процесса (получатель освобождает HeapFree). Одновременно идёт одно задание:
+   FALSE — предыдущее ещё печатается или не хватило памяти. */
+#define SM_WM_PRINTDONE (WM_APP + 20)
+#define SM_WM_PRINTSTART (WM_APP + 21) /* главному окну: печать запущена (обновить заголовок) */
+BOOL Sm6337_PrintAsync(HWND hNotify, const unsigned char *bytes, DWORD len);
+BOOL Sm6337_PrintBusy(void);
+
 /* Полоса иконок тулбара 16x16: toolbar.bmp рядом с exe, если лежит (версия «со всеми файлами»),
    иначе встроенный ресурс IDB_TOOLBAR. Освободить DeleteObject. NULL — не нашлась. */
 HBITMAP Sm6337_LoadToolbarStrip(void);

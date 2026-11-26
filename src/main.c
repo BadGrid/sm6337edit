@@ -1352,6 +1352,7 @@ static void SetDocTitle(HWND hWnd)
     strcpy(t, name);
     if (g_hEdit && SendMessageA(g_hEdit, EM_GETMODIFY, 0, 0)) strcat(t, " *");
     strcat(t, " — SM6337 Edit");
+    if (Sm6337_PrintBusy()) strcat(t, " (идёт печать...)");
     if (strcmp(t, last) != 0) { strcpy(last, t); SetWindowTextA(hWnd, t); }
 }
 
@@ -1628,7 +1629,19 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
     case WM_TIMER:
         if (wParam == TB_TIMER_ID) { UpdateToolbarState(); SetDocTitle(hWnd); }
         return 0;
+    case SM_WM_PRINTSTART:
+        SetDocTitle(hWnd);
+        return 0;
+    case SM_WM_PRINTDONE:
+        SetDocTitle(hWnd);
+        if (!wParam && lParam && ((const char *)lParam)[0])
+            MessageBoxA(hWnd, (const char *)lParam, "Ошибка печати", MB_OK | MB_ICONERROR);
+        if (lParam) HeapFree(GetProcessHeap(), 0, (LPVOID)lParam);
+        return 0;
     case WM_CLOSE:
+        if (Sm6337_PrintBusy() &&
+            MessageBoxA(hWnd, "Идёт печать: данные ещё уходят на принтер. Если закрыть программу сейчас, печать оборвётся.\nВсё равно закрыть?",
+                        "SM6337 Edit", MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES) return 0;
         if (!AskSaveChanges(hWnd)) return 0;   /* Отмена — не закрываем */
         DestroyWindow(hWnd);
         return 0;
@@ -1964,13 +1977,14 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
                 }
             }
 
-            char err[256] = "";
-            HCURSOR oldCur = SetCursor(LoadCursorA(NULL, (LPCSTR)IDC_WAIT)); /* запись в порт блокирует окно, пока принтер принимает данные */
-            BOOL ok = Sm6337_PrintRaw(job, jobLen, err, 256);
-            SetCursor(oldCur);
+            /* печать идёт в отдельном потоке: окно не виснет, даже если принтер выключен */
+            if (Sm6337_PrintBusy())
+                MessageBoxA(hWnd, "Предыдущее задание ещё печатается. Дождитесь окончания.", "SM6337 Edit", MB_OK | MB_ICONINFORMATION);
+            else if (!Sm6337_PrintAsync(hWnd, job, jobLen))
+                MessageBoxA(hWnd, "Не удалось запустить печать (не хватило памяти).", "Ошибка печати", MB_OK | MB_ICONERROR);
+            else
+                SetDocTitle(hWnd);
             HeapFree(GetProcessHeap(), 0, job);
-
-            if (!ok) MessageBoxA(hWnd, err, "Ошибка печати", MB_OK | MB_ICONERROR);
             return 0;
         }
         case IDM_FILE_PRINTSETUP:
