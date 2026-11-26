@@ -538,6 +538,7 @@ static HMENU BuildMenu(void)
     AppendMenuA(hFile, MF_STRING, IDM_FILE_SAVEAS, "Сохранить &как...");
     AppendMenuA(hFile, MF_SEPARATOR, 0, NULL);
     AppendMenuA(hFile, MF_STRING, IDM_FILE_PRINTPREVIEW, "Пред&просмотр печати...");
+    AppendMenuA(hFile, MF_STRING, IDM_FILE_PRINTSEL, "Печать &выделенного");
     AppendMenuA(hFile, MF_STRING, IDM_FILE_PRINT, "&Печать\tCtrl+P");
     AppendMenuA(hFile, MF_STRING, IDM_FILE_PRINTSETUP, "Параметры &печати (СМ6337)...");
     AppendMenuA(hFile, MF_SEPARATOR, 0, NULL);
@@ -853,6 +854,10 @@ static void ReadParaFmt(ParaFmt *pf, int cp, int cols, double startCol)
     }
 }
 
+/* «Печать выделенного»: BuildPrintJob берёт в задание только знаки с позициями [g_selMin, g_selMax) */
+static BOOL g_printSel = FALSE;
+static int g_selMin, g_selMax;
+
 /* Собирает поток байт ESC/P для печати: идёт по абзацам RichEdit, у каждого читает формат абзаца
    (выравнивание, отступы, табы) и формат каждого знака (жирный/подчёркнутый/шаг печати/индексы),
    раскладывает строки (программный перенос по словам, с учётом веса шага печати) и шлёт знаки с
@@ -922,6 +927,7 @@ static unsigned char *BuildPrintJob(const Sm6337Settings *settings, int *outLine
     while (more) {
         ParaFmt pf;
         int m = 0;
+        int cp0 = cp;
         ReadParaFmt(&pf, cp, settings->cols, cx.startCol);
         for (;;) {
             unsigned char raw;
@@ -929,6 +935,9 @@ static unsigned char *BuildPrintJob(const Sm6337Settings *settings, int *outLine
             raw = (unsigned char)text[i];
             if (raw == '\r') { i++; if (i < len && text[i] == '\n') i++; cp++; break; } /* конец абзаца (CR LF — один знак) */
             if (raw == '\n') { i++; cp++; break; }                                    /* одиночный LF — тоже конец абзаца */
+            if (g_printSel && (cp < g_selMin || cp >= g_selMax)) { /* знак вне выделения */
+                i++; cp++; continue;
+            }
             {
                 PCell *ce = &cells[m];
                 ZeroMemory(ce, sizeof(*ce));
@@ -956,7 +965,9 @@ static unsigned char *BuildPrintJob(const Sm6337Settings *settings, int *outLine
                 i++; cp++;
             }
         }
-        LayoutParagraph(&cx, &pf, cells, m, software, &haveLine);
+        /* при печати выделенного абзац берётся, только если выделение захватывает его знак или конец абзаца */
+        if (!g_printSel || (cp0 < g_selMax && cp - 1 >= g_selMin && !(m == 0 && cp - 1 < cp0)))
+            LayoutParagraph(&cx, &pf, cells, m, software, &haveLine);
     }
 
     {   /* вернуть начертание в исходное состояние */
@@ -2028,6 +2039,19 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
             }
             Sm6337_ShowPreview(hWnd, GetModuleHandleA(NULL), job, jobLen, &settings);
             HeapFree(GetProcessHeap(), 0, job);
+            return 0;
+        }
+        case IDM_FILE_PRINTSEL: {
+            CHARRANGE sel;
+            SendMessageA(g_hEdit, EM_EXGETSEL, 0, (LPARAM)&sel);
+            if (sel.cpMax <= sel.cpMin) {
+                MessageBoxA(hWnd, "Ничего не выделено. Выделите фрагмент, который нужно напечатать.", "SM6337 Edit", MB_OK | MB_ICONINFORMATION);
+                return 0;
+            }
+            g_selMin = (int)sel.cpMin; g_selMax = (int)sel.cpMax;
+            g_printSel = TRUE;
+            SendMessageA(hWnd, WM_COMMAND, IDM_FILE_PRINT, 0); /* дальше — обычная печать; задание собирается сразу, здесь */
+            g_printSel = FALSE;
             return 0;
         }
         case IDM_FILE_PRINT: {
