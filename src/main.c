@@ -1513,6 +1513,41 @@ static const char *ToolbarTip(UINT id)
     return NULL;
 }
 
+/* ---- Положение и размер окна между запусками ([Window] в sm6337.ini) ---- */
+static void SaveWindowPlacement(HWND hWnd)
+{
+    WINDOWPLACEMENT wp; char v[12]; int x, y, w, h;
+    ZeroMemory(&wp, sizeof(wp)); wp.length = sizeof(wp);
+    if (!GetWindowPlacement(hWnd, &wp)) return;
+    x = wp.rcNormalPosition.left; y = wp.rcNormalPosition.top;
+    w = wp.rcNormalPosition.right - x; h = wp.rcNormalPosition.bottom - y;
+    if (x < 0) x = 0;
+    if (y < 0) y = 0;
+    if (w < 320 || h < 240) return; /* мусор — не запоминаем */
+    UIntToStrA((unsigned long)x, v); WritePrivateProfileStringA("Window", "X", v, g_iniPath);
+    UIntToStrA((unsigned long)y, v); WritePrivateProfileStringA("Window", "Y", v, g_iniPath);
+    UIntToStrA((unsigned long)w, v); WritePrivateProfileStringA("Window", "W", v, g_iniPath);
+    UIntToStrA((unsigned long)h, v); WritePrivateProfileStringA("Window", "H", v, g_iniPath);
+    WritePrivateProfileStringA("Window", "Max", wp.showCmd == SW_SHOWMAXIMIZED ? "1" : "0", g_iniPath);
+}
+
+/* Сохранённые размер и положение; FALSE — не сохранялись или окно оказалось бы за экраном
+   (сменили разрешение, отключили монитор). */
+static BOOL LoadWindowPlacement(int *x, int *y, int *w, int *h, BOOL *maximized)
+{
+    int sw = GetSystemMetrics(SM_CXSCREEN), sh = GetSystemMetrics(SM_CYSCREEN);
+    *w = (int)GetPrivateProfileIntA("Window", "W", 0, g_iniPath);
+    *h = (int)GetPrivateProfileIntA("Window", "H", 0, g_iniPath);
+    *x = (int)GetPrivateProfileIntA("Window", "X", 0, g_iniPath);
+    *y = (int)GetPrivateProfileIntA("Window", "Y", 0, g_iniPath);
+    *maximized = GetPrivateProfileIntA("Window", "Max", 0, g_iniPath) ? TRUE : FALSE;
+    if (*w < 320 || *h < 240) return FALSE;
+    if (*w > sw) *w = sw;
+    if (*h > sh) *h = sh;
+    if (*x < 0 || *y < 0 || *x > sw - 120 || *y > sh - 80) return FALSE;
+    return TRUE;
+}
+
 /* ---- Печать по листам --------------------------------------------------------------------------
    На листах A4 аппаратный форм-фид уводит принтер в АВР, поэтому многостраничный документ, отправленный
    одним куском, дошёл бы до края листа и продолжил печатать по валику. Здесь задание режется на листы
@@ -1751,6 +1786,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
             MessageBoxA(hWnd, "Идёт печать: данные ещё уходят на принтер. Если закрыть программу сейчас, печать оборвётся.\nВсё равно закрыть?",
                         "SM6337 Edit", MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES) return 0;
         if (!AskSaveChanges(hWnd)) return 0;   /* Отмена — не закрываем */
+        SaveWindowPlacement(hWnd);
         DestroyWindow(hWnd);
         return 0;
     case WM_DROPFILES: {
@@ -2342,11 +2378,14 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     wc.lpszClassName = "SM6337EditWndClass";
     RegisterClassA(&wc);
 
+    int wx, wy, ww, wh; BOOL wmax = FALSE;
+    BOOL haveWin = LoadWindowPlacement(&wx, &wy, &ww, &wh, &wmax);
     HWND hWnd = CreateWindowA("SM6337EditWndClass", "Без имени — SM6337 Edit",
         WS_OVERLAPPEDWINDOW,
-        CW_USEDEFAULT, CW_USEDEFAULT, 800, 600,
+        haveWin ? wx : CW_USEDEFAULT, haveWin ? wy : CW_USEDEFAULT, haveWin ? ww : 800, haveWin ? wh : 600,
         NULL, BuildMenu(), hInstance, NULL);
 
+    if (haveWin && wmax && (nCmdShow == SW_SHOWNORMAL || nCmdShow == SW_SHOWDEFAULT)) nCmdShow = SW_SHOWMAXIMIZED;
     ShowWindow(hWnd, nCmdShow);
     UpdateWindow(hWnd);
 
