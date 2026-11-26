@@ -54,7 +54,8 @@ static void LoadSettings(void)
     g_lines = (int)GetPrivateProfileIntA("Settings", "Lines", 70, g_iniPath);
     if (g_cols < 1 || g_cols > 255) g_cols = 82;
     if (g_lines < 1 || g_lines > 255) g_lines = 70;
-    g_pageMode = (Sm6337PageMode)GetPrivateProfileIntA("Settings", "PageMode", SM_PAGEMODE_SOFTWARE, g_iniPath);
+    g_pageMode = (GetPrivateProfileIntA("Settings", "PageMode", SM_PAGEMODE_SOFTWARE, g_iniPath) == (UINT)SM_PAGEMODE_PRINTER)
+               ? SM_PAGEMODE_PRINTER : SM_PAGEMODE_SOFTWARE; /* любое другое значение в ini — программный режим */
     g_feedLinesAfterPrint = (int)GetPrivateProfileIntA("Settings", "FeedLines", 2, g_iniPath);
     if (g_feedLinesAfterPrint < 0 || g_feedLinesAfterPrint > 9) g_feedLinesAfterPrint = 2;
     g_unidirectional = GetPrivateProfileIntA("Settings", "Unidirectional", 0, g_iniPath) ? TRUE : FALSE;
